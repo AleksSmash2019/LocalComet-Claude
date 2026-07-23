@@ -597,50 +597,143 @@ fn locate_project_root() -> Option<PathBuf> {
 }
 
 #[cfg(debug_assertions)]
+const ALLOWED_PYTHON_MINOR_VERSIONS: &[u32] = &[11, 12, 13, 14];
+
+#[cfg(debug_assertions)]
+fn is_windows_apps_stub(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains("windowsapps")
+}
+
+#[cfg(debug_assertions)]
+fn validate_python_candidate(candidate: &Path) -> Option<String> {
+    let output = std::process::Command::new(candidate)
+        .arg("-I")
+        .arg("-c")
+        .arg("import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let major: u32 = parts[0].parse().ok()?;
+    let minor: u32 = parts[1].parse().ok()?;
+    if major != 3 || !ALLOWED_PYTHON_MINOR_VERSIONS.contains(&minor) {
+        return None;
+    }
+    Some(version)
+}
+
+#[cfg(debug_assertions)]
+const PREFERRED_PYTHON_MINOR: u32 = 11;
+
+#[cfg(debug_assertions)]
 fn find_python_on_path() -> Option<PathBuf> {
-    let path_value = std::env::var_os("PATH")?;
-    for base in std::env::split_paths(&path_value) {
-        for name in ["python.exe", "python3.exe", "py.exe"] {
-            let candidate = base.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(path_value) = std::env::var_os("PATH") {
+        for base in std::env::split_paths(&path_value) {
+            if is_windows_apps_stub(&base) {
+                continue;
+            }
+            for name in ["python.exe", "python3.exe"] {
+                let candidate = base.join(name);
+                if candidate.is_file() {
+                    candidates.push(candidate);
+                }
             }
         }
     }
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        let local_app_data_path = PathBuf::from(local_app_data);
-        let python_launcher = local_app_data_path.join("Microsoft/WindowsApps/python.exe");
-        if python_launcher.is_file() {
-            return Some(python_launcher);
-        }
-        let python_launcher = local_app_data_path.join("Microsoft/WindowsApps/python3.exe");
-        if python_launcher.is_file() {
-            return Some(python_launcher);
-        }
-        let python_launcher = local_app_data_path.join("Microsoft/WindowsApps/py.exe");
-        if python_launcher.is_file() {
-            return Some(python_launcher);
-        }
-    }
-    if let Ok(program_files) = std::env::var("ProgramFiles") {
-        for entry in std::fs::read_dir(&program_files).ok()?.flatten() {
-            let path = entry.path();
-            if path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| s.starts_with("Python"))
-                .unwrap_or(false)
-            {
-                for name in ["python.exe", "python3.exe"] {
-                    let candidate = path.join(name);
-                    if candidate.is_file() {
-                        return Some(candidate);
+        let local_app_data_path = PathBuf::from(&local_app_data);
+        let python_dir = local_app_data_path.join("Python");
+        if let Ok(entries) = std::fs::read_dir(&python_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    for name in ["python.exe", "python3.exe"] {
+                        let candidate = path.join(name);
+                        if candidate.is_file() {
+                            candidates.push(candidate);
+                        }
                     }
                 }
             }
         }
     }
-    None
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        if let Ok(entries) = std::fs::read_dir(&program_files) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.starts_with("Python"))
+                    .unwrap_or(false)
+                {
+                    for name in ["python.exe", "python3.exe"] {
+                        let candidate = path.join(name);
+                        if candidate.is_file() {
+                            candidates.push(candidate);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Validate all candidates and collect (path, version_string, minor_version)
+    let mut validated: Vec<(PathBuf, String, u32)> = Vec::new();
+    for candidate in &candidates {
+        if let Some(version) = validate_python_candidate(candidate) {
+            let minor: u32 = version
+                .split('.')
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            validated.push((candidate.clone(), version, minor));
+        }
+    }
+    if validated.is_empty() {
+        return None;
+    }
+
+    // Priority: prefer 3.11; otherwise pick highest allowed minor version
+    let selected = if let Some(preferred) = validated.iter().find(|(_, _, minor)| *minor == PREFERRED_PYTHON_MINOR) {
+        preferred.clone()
+    } else {
+        validated
+            .iter()
+            .max_by_key(|(_, _, minor)| *minor)
+            .unwrap()
+            .clone()
+    };
+
+    let (path, version, minor) = selected;
+    if minor != PREFERRED_PYTHON_MINOR {
+        crate::startup::record(
+            crate::startup::StartupPhase::BackendStart,
+            &format!(
+                "WARN_python_version=selected_3.{}_preferred_3.{}",
+                minor, PREFERRED_PYTHON_MINOR
+            ),
+            "LC_START_100",
+        );
+    }
+    crate::startup::record(
+        crate::startup::StartupPhase::BackendStart,
+        &format!("python_selected={}_v{}", path.display(), version),
+        "LC_START_100",
+    );
+    Some(path)
 }
 
 fn minimal_sidecar_environment(python_exe: Option<&Path>) -> Vec<(OsString, OsString)> {
@@ -854,5 +947,72 @@ mod tests {
             &other,
         );
         assert!(!other.saw_health_ok.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn windows_apps_stub_paths_are_rejected() {
+        assert!(is_windows_apps_stub(Path::new(
+            r"C:\Users\DNS\AppData\Local\Microsoft\WindowsApps\python.exe"
+        )));
+        assert!(is_windows_apps_stub(Path::new(
+            r"C:\Users\DNS\AppData\Local\Microsoft\WindowsApps\python3.exe"
+        )));
+        assert!(!is_windows_apps_stub(Path::new(
+            r"C:\Users\DNS\AppData\Local\Python\bin\python.exe"
+        )));
+        assert!(!is_windows_apps_stub(Path::new(
+            r"C:\Program Files\Python311\python.exe"
+        )));
+        assert!(!is_windows_apps_stub(Path::new(
+            r"C:\Python311\python.exe"
+        )));
+    }
+
+    #[test]
+    fn validate_python_rejects_non_python_executables() {
+        let not_python = Path::new(r"C:\Windows\System32\cmd.exe");
+        if not_python.is_file() {
+            assert!(validate_python_candidate(not_python).is_none());
+        }
+    }
+
+    #[test]
+    fn sidecar_crash_is_detected_without_hang_or_panic() {
+        let Some(root) = std::env::var_os("LOCALCOMET_TEST_PROJECT_ROOT").map(PathBuf::from) else {
+            return;
+        };
+        let Some(python) = std::env::var_os("LOCALCOMET_TEST_PYTHON").map(PathBuf::from) else {
+            return;
+        };
+        let supervisor =
+            DesktopSidecarSupervisor::new(SupervisorConfig::debug_for_tests(root, python));
+        supervisor
+            .start_and_wait_ready(Duration::from_secs(5))
+            .unwrap();
+        assert!(supervisor.snapshot().running);
+
+        // Kill the sidecar process externally (simulate crash)
+        {
+            let mut state = supervisor.state.lock().expect("lock");
+            if let Some(process) = state.process.as_mut() {
+                process.terminate(9);
+                let _ = process.wait_bounded(2_000);
+            }
+        }
+
+        // Allow stdout reader thread to observe EOF
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Snapshot must report not running
+        let snap = supervisor.snapshot();
+        assert!(!snap.running, "snapshot must show sidecar not running after crash");
+
+        // send_ipc_frame must return an error, not hang or panic
+        let frame = ipc::json_frame(r#"{"type":"request","id":"desk-crash-000001","method":"app.health","payload":{}}"#).unwrap();
+        let result = supervisor.send_ipc_frame(frame);
+        assert!(result.is_err(), "send_ipc_frame must fail after sidecar crash");
+
+        // Shutdown must not panic even after crash
+        let _ = supervisor.shutdown();
     }
 }

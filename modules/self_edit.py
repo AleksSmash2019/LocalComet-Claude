@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from modules.project_paths import get_project_root
@@ -728,26 +729,43 @@ def _restore_rollback(rollback_path: Path):
 
 
 def _run_tests(tests, changed_files):
-    commands = []
+    test_commands = []
+    compile_commands = []
 
     for test in tests or []:
         if isinstance(test, str) and test.strip():
-            commands.append(test.strip())
+            test_commands.append(test.strip())
 
     for full in changed_files:
         if full.suffix == ".py":
             rel = str(full.relative_to(ROOT_DIR)).replace("\\", "/")
-            cmd = f"python -m py_compile {rel}"
+            compile_cmd = [sys.executable, "-m", "py_compile", rel]
 
-            if cmd not in commands:
-                commands.append(cmd)
+            if compile_cmd not in compile_commands:
+                compile_commands.append(compile_cmd)
 
-    if not commands:
+    if not test_commands and not compile_commands:
         return True, "Тестов нет."
 
     outputs = []
 
-    for cmd in commands:
+    for cmd in compile_commands:
+        result = subprocess.run(
+            cmd,
+            cwd=str(ROOT_DIR),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        outputs.append(
+            f"$ {' '.join(cmd)}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}\nCODE: {result.returncode}"
+        )
+
+        if result.returncode != 0:
+            return False, "\n\n".join(outputs)
+
+    for cmd in test_commands:
         result = subprocess.run(
             cmd,
             cwd=str(ROOT_DIR),
@@ -1127,9 +1145,8 @@ def project_health():
         rel = str(path.relative_to(ROOT_DIR)).replace("\\", "/")
 
         result = subprocess.run(
-            f"python -m py_compile {rel}",
+            [sys.executable, "-m", "py_compile", rel],
             cwd=str(ROOT_DIR),
-            shell=True,
             capture_output=True,
             text=True,
             timeout=60,

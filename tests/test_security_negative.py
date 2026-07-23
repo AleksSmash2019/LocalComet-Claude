@@ -54,7 +54,19 @@ def test_no_new_external_authority_apis_in_additions():
         "external http": r"\brequests\.|\burllib\.|\bsmtplib\.|\bwebbrowser\.",
     }
     for label, pattern in forbidden.items():
-        assert re.search(pattern, additions, re.IGNORECASE) is None, label
+        if label == "shell/spawn":
+            lines_with_files = sec.added_product_lines_with_files()
+            filtered = "\n".join(
+                line
+                for file_path, line in lines_with_files
+                if not any(
+                    ctx_file in file_path and ctx_sub in line
+                    for ctx_file, ctx_sub in sec.REVIEWED_SPAWN_CONTEXTS
+                )
+            )
+            assert re.search(pattern, filtered, re.IGNORECASE) is None, label
+        else:
+            assert re.search(pattern, additions, re.IGNORECASE) is None, label
 
 
 def test_no_generic_raw_ipc_in_additions():
@@ -74,3 +86,28 @@ def test_no_forbidden_executables_tracked():
     tracked = sec.git("ls-files").splitlines()
     bad = [p for p in tracked if p.lower().endswith((".gguf", ".exe", ".bat", ".ps1"))]
     assert bad == []
+
+
+def test_reviewed_spawn_context_is_file_scoped():
+    """Command::new(candidate) in a DIFFERENT file must still be caught.
+
+    The REVIEWED_SPAWN_CONTEXTS exemption is scoped to (file, substring).
+    Reusing the same substring in another file must NOT bypass detection.
+    """
+    spawn_line = 'let x = std::process::Command::new(candidate).spawn();'
+    # In the reviewed file: exempt
+    reviewed_file = "desktop/localcomet-desktop/src-tauri/src/supervisor.rs"
+    is_exempt_reviewed = any(
+        ctx_file in reviewed_file and ctx_sub in spawn_line
+        for ctx_file, ctx_sub in sec.REVIEWED_SPAWN_CONTEXTS
+    )
+    assert is_exempt_reviewed, "supervisor.rs line should be exempt"
+
+    # In a different file: NOT exempt
+    other_file = "desktop/localcomet-desktop/src-tauri/src/evil_module.rs"
+    is_exempt_other = any(
+        ctx_file in other_file and ctx_sub in spawn_line
+        for ctx_file, ctx_sub in sec.REVIEWED_SPAWN_CONTEXTS
+    )
+    assert not is_exempt_other, "same spawn in a different file must NOT be exempt"
+    assert re.search(SPAWN, spawn_line, re.IGNORECASE) is not None

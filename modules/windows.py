@@ -147,9 +147,13 @@ def open_app(app: str):
         if app == "notepad":
             return _open_notepad_file()
 
-        command = APP_COMMANDS.get(app, app)
+        command = APP_COMMANDS.get(app)
 
-        subprocess.Popen(command, shell=True)
+        if command is None:
+            allowed = ", ".join(sorted(APP_COMMANDS.keys()))
+            return f"Приложение не найдено в списке разрешённых: {app}. Доступны: {allowed}"
+
+        subprocess.Popen([command])
         time.sleep(1)
 
         set_value("last_windows_app", app)
