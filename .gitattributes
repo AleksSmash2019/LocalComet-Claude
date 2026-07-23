@@ -1,2 +1,10 @@
 third_party/llama.cpp/LICENSE-MIT.txt text eol=lf
 desktop/localcomet-desktop/src-tauri/resources/localcomet/approved-artifacts.v1.json text eol=lf
+
+# GR-01 Phase 6: normalize source code to LF (prevents CRLF drift on Windows
+# core.autocrlf checkouts; recurring incident in Phases 0-1).
+*.py text eol=lf
+*.rs text eol=lf
+*.ts text eol=lf
+*.svelte text eol=lf
+*.toml text eol=lf
