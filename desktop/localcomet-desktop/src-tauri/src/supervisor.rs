@@ -597,47 +597,104 @@ fn locate_project_root() -> Option<PathBuf> {
 }
 
 #[cfg(debug_assertions)]
+const ALLOWED_PYTHON_MINOR_VERSIONS: &[u32] = &[11, 12, 13, 14];
+
+#[cfg(debug_assertions)]
+fn is_windows_apps_stub(path: &Path) -> bool {
+    path.to_string_lossy()
+        .to_ascii_lowercase()
+        .contains("windowsapps")
+}
+
+#[cfg(debug_assertions)]
+fn validate_python_candidate(candidate: &Path) -> Option<String> {
+    let output = std::process::Command::new(candidate)
+        .arg("-I")
+        .arg("-c")
+        .arg("import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let major: u32 = parts[0].parse().ok()?;
+    let minor: u32 = parts[1].parse().ok()?;
+    if major != 3 || !ALLOWED_PYTHON_MINOR_VERSIONS.contains(&minor) {
+        return None;
+    }
+    Some(version)
+}
+
+#[cfg(debug_assertions)]
 fn find_python_on_path() -> Option<PathBuf> {
-    let path_value = std::env::var_os("PATH")?;
-    for base in std::env::split_paths(&path_value) {
-        for name in ["python.exe", "python3.exe", "py.exe"] {
-            let candidate = base.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(path_value) = std::env::var_os("PATH") {
+        for base in std::env::split_paths(&path_value) {
+            if is_windows_apps_stub(&base) {
+                continue;
+            }
+            for name in ["python.exe", "python3.exe"] {
+                let candidate = base.join(name);
+                if candidate.is_file() {
+                    candidates.push(candidate);
+                }
             }
         }
     }
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-        let local_app_data_path = PathBuf::from(local_app_data);
-        let python_launcher = local_app_data_path.join("Microsoft/WindowsApps/python.exe");
-        if python_launcher.is_file() {
-            return Some(python_launcher);
-        }
-        let python_launcher = local_app_data_path.join("Microsoft/WindowsApps/python3.exe");
-        if python_launcher.is_file() {
-            return Some(python_launcher);
-        }
-        let python_launcher = local_app_data_path.join("Microsoft/WindowsApps/py.exe");
-        if python_launcher.is_file() {
-            return Some(python_launcher);
-        }
-    }
-    if let Ok(program_files) = std::env::var("ProgramFiles") {
-        for entry in std::fs::read_dir(&program_files).ok()?.flatten() {
-            let path = entry.path();
-            if path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| s.starts_with("Python"))
-                .unwrap_or(false)
-            {
-                for name in ["python.exe", "python3.exe"] {
-                    let candidate = path.join(name);
-                    if candidate.is_file() {
-                        return Some(candidate);
+        let local_app_data_path = PathBuf::from(&local_app_data);
+        let python_dir = local_app_data_path.join("Python");
+        if let Ok(entries) = std::fs::read_dir(&python_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    for name in ["python.exe", "python3.exe"] {
+                        let candidate = path.join(name);
+                        if candidate.is_file() {
+                            candidates.push(candidate);
+                        }
                     }
                 }
             }
+        }
+    }
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        if let Ok(entries) = std::fs::read_dir(&program_files) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.starts_with("Python"))
+                    .unwrap_or(false)
+                {
+                    for name in ["python.exe", "python3.exe"] {
+                        let candidate = path.join(name);
+                        if candidate.is_file() {
+                            candidates.push(candidate);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for candidate in &candidates {
+        if let Some(version) = validate_python_candidate(candidate) {
+            crate::startup::record(
+                crate::startup::StartupPhase::BackendStart,
+                &format!("python_selected={}_v{}", candidate.display(), version),
+                "LC_START_100",
+            );
+            return Some(candidate.clone());
         }
     }
     None
@@ -854,5 +911,32 @@ mod tests {
             &other,
         );
         assert!(!other.saw_health_ok.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn windows_apps_stub_paths_are_rejected() {
+        assert!(is_windows_apps_stub(Path::new(
+            r"C:\Users\DNS\AppData\Local\Microsoft\WindowsApps\python.exe"
+        )));
+        assert!(is_windows_apps_stub(Path::new(
+            r"C:\Users\DNS\AppData\Local\Microsoft\WindowsApps\python3.exe"
+        )));
+        assert!(!is_windows_apps_stub(Path::new(
+            r"C:\Users\DNS\AppData\Local\Python\bin\python.exe"
+        )));
+        assert!(!is_windows_apps_stub(Path::new(
+            r"C:\Program Files\Python311\python.exe"
+        )));
+        assert!(!is_windows_apps_stub(Path::new(
+            r"C:\Python311\python.exe"
+        )));
+    }
+
+    #[test]
+    fn validate_python_rejects_non_python_executables() {
+        let not_python = Path::new(r"C:\Windows\System32\cmd.exe");
+        if not_python.is_file() {
+            assert!(validate_python_candidate(not_python).is_none());
+        }
     }
 }
