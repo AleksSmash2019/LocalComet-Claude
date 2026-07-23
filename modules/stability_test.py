@@ -972,8 +972,8 @@ def _control_panel_init_smoke_case():
             ]
 
             checks = [
-                panel.LOCALCOMET_VERSION == "v6.02",
-                "Command Center Control Panel" in panel.LOCALCOMET_VERSION_LABEL,
+                panel.LOCALCOMET_VERSION == "v6.84.5.1",
+                "Explainable Task Planner" in panel.LOCALCOMET_VERSION_LABEL,
                 tab_count >= len(required_tabs),
                 tab_texts[0] == "🚀 Command Center",
                 all(tab in tab_texts for tab in required_tabs),
