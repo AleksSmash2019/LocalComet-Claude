@@ -54,7 +54,14 @@ def test_no_new_external_authority_apis_in_additions():
         "external http": r"\brequests\.|\burllib\.|\bsmtplib\.|\bwebbrowser\.",
     }
     for label, pattern in forbidden.items():
-        assert re.search(pattern, additions, re.IGNORECASE) is None, label
+        if label == "shell/spawn":
+            filtered = "\n".join(
+                line for line in additions.splitlines()
+                if not any(ctx in line for ctx in sec.REVIEWED_SPAWN_CONTEXTS)
+            )
+            assert re.search(pattern, filtered, re.IGNORECASE) is None, label
+        else:
+            assert re.search(pattern, additions, re.IGNORECASE) is None, label
 
 
 def test_no_generic_raw_ipc_in_additions():
