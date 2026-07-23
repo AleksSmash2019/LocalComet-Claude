@@ -109,4 +109,36 @@ mod tests {
         let error = read_frame(&mut reader).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
+
+    #[test]
+    fn reader_returns_eof_on_truncated_header() {
+        let mut reader = Cursor::new([0_u8, 0]);
+        let error = read_frame(&mut reader).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn reader_returns_eof_on_partial_body() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&100_u32.to_be_bytes());
+        data.extend_from_slice(b"only-ten");
+        let mut reader = Cursor::new(data);
+        let error = read_frame(&mut reader).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn reader_rejects_oversized_frame_length() {
+        let huge = (MAX_FRAME_BYTES as u32) + 1;
+        let mut reader = Cursor::new(huge.to_be_bytes());
+        let error = read_frame(&mut reader).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn reader_handles_empty_stream_as_eof() {
+        let mut reader = Cursor::new(Vec::new());
+        let error = read_frame(&mut reader).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
 }

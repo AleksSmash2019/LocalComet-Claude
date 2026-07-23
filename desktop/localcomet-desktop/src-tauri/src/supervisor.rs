@@ -939,4 +939,44 @@ mod tests {
             assert!(validate_python_candidate(not_python).is_none());
         }
     }
+
+    #[test]
+    fn sidecar_crash_is_detected_without_hang_or_panic() {
+        let Some(root) = std::env::var_os("LOCALCOMET_TEST_PROJECT_ROOT").map(PathBuf::from) else {
+            return;
+        };
+        let Some(python) = std::env::var_os("LOCALCOMET_TEST_PYTHON").map(PathBuf::from) else {
+            return;
+        };
+        let supervisor =
+            DesktopSidecarSupervisor::new(SupervisorConfig::debug_for_tests(root, python));
+        supervisor
+            .start_and_wait_ready(Duration::from_secs(5))
+            .unwrap();
+        assert!(supervisor.snapshot().running);
+
+        // Kill the sidecar process externally (simulate crash)
+        {
+            let mut state = supervisor.state.lock().expect("lock");
+            if let Some(process) = state.process.as_mut() {
+                process.terminate(9);
+                let _ = process.wait_bounded(2_000);
+            }
+        }
+
+        // Allow stdout reader thread to observe EOF
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Snapshot must report not running
+        let snap = supervisor.snapshot();
+        assert!(!snap.running, "snapshot must show sidecar not running after crash");
+
+        // send_ipc_frame must return an error, not hang or panic
+        let frame = ipc::json_frame(r#"{"type":"request","id":"desk-crash-000001","method":"app.health","payload":{}}"#).unwrap();
+        let result = supervisor.send_ipc_frame(frame);
+        assert!(result.is_err(), "send_ipc_frame must fail after sidecar crash");
+
+        // Shutdown must not panic even after crash
+        let _ = supervisor.shutdown();
+    }
 }
