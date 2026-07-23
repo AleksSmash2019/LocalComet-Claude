@@ -633,6 +633,9 @@ fn validate_python_candidate(candidate: &Path) -> Option<String> {
 }
 
 #[cfg(debug_assertions)]
+const PREFERRED_PYTHON_MINOR: u32 = 11;
+
+#[cfg(debug_assertions)]
 fn find_python_on_path() -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
@@ -687,17 +690,50 @@ fn find_python_on_path() -> Option<PathBuf> {
         }
     }
 
+    // Validate all candidates and collect (path, version_string, minor_version)
+    let mut validated: Vec<(PathBuf, String, u32)> = Vec::new();
     for candidate in &candidates {
         if let Some(version) = validate_python_candidate(candidate) {
-            crate::startup::record(
-                crate::startup::StartupPhase::BackendStart,
-                &format!("python_selected={}_v{}", candidate.display(), version),
-                "LC_START_100",
-            );
-            return Some(candidate.clone());
+            let minor: u32 = version
+                .split('.')
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            validated.push((candidate.clone(), version, minor));
         }
     }
-    None
+    if validated.is_empty() {
+        return None;
+    }
+
+    // Priority: prefer 3.11; otherwise pick highest allowed minor version
+    let selected = if let Some(preferred) = validated.iter().find(|(_, _, minor)| *minor == PREFERRED_PYTHON_MINOR) {
+        preferred.clone()
+    } else {
+        validated
+            .iter()
+            .max_by_key(|(_, _, minor)| *minor)
+            .unwrap()
+            .clone()
+    };
+
+    let (path, version, minor) = selected;
+    if minor != PREFERRED_PYTHON_MINOR {
+        crate::startup::record(
+            crate::startup::StartupPhase::BackendStart,
+            &format!(
+                "WARN_python_version=selected_3.{}_preferred_3.{}",
+                minor, PREFERRED_PYTHON_MINOR
+            ),
+            "LC_START_100",
+        );
+    }
+    crate::startup::record(
+        crate::startup::StartupPhase::BackendStart,
+        &format!("python_selected={}_v{}", path.display(), version),
+        "LC_START_100",
+    );
+    Some(path)
 }
 
 fn minimal_sidecar_environment(python_exe: Option<&Path>) -> Vec<(OsString, OsString)> {

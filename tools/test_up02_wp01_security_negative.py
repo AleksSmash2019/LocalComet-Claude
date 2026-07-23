@@ -85,16 +85,21 @@ FILES_COMMANDS = frozenset(
 )
 
 # Reviewed process-spawn contexts that are NOT new external authority.
-# Each entry is a substring that, if present in an added line containing a
-# spawn pattern, marks it as a deliberate reviewed usage (not a new attack
-# surface). Adding an entry here is a security-relevant change requiring
-# explicit owner approval -- never edit just to make the test pass.
-REVIEWED_SPAWN_CONTEXTS = frozenset(
+# Each entry is a (file_path, substring) tuple. A spawn-pattern line is exempt
+# ONLY if it appears in the specified file AND contains the specified substring.
+# This prevents reuse of a reviewed name in a different file from bypassing detection.
+# Adding an entry here is a security-relevant change requiring explicit owner
+# approval -- never edit just to make the test pass.
+#
+# ("src/supervisor.rs", "Command::new(candidate)")
+#   Reviewed: 24.07.2026, approved by owner.
+#   Context: validate_python_candidate() runs `python -I -c "import sys; ..."`
+#   to verify a candidate interpreter before using it as the sidecar runtime.
+#   Safe because: fixed args (-I -c <static string>), no user input, -I isolated
+#   mode (no site-packages, no env vars), output captured via .output().
+REVIEWED_SPAWN_CONTEXTS: frozenset[tuple[str, str]] = frozenset(
     {
-        # supervisor.rs validate_python_candidate: runs `python -I -c "import sys; ..."`
-        # to verify a candidate interpreter before using it as the sidecar runtime.
-        # Bounded: fixed args (-I -c <static string>), no user input, output captured.
-        "Command::new(candidate)",
+        ("src/supervisor.rs", "Command::new(candidate)"),
     }
 )
 
@@ -121,6 +126,19 @@ def added_product_lines() -> str:
         for line in diff.splitlines()
         if line.startswith("+") and not line.startswith("+++")
     )
+
+
+def added_product_lines_with_files() -> list[tuple[str, str]]:
+    """Return (file_path, added_line) tuples from the product diff."""
+    diff = git("diff", "--unified=0", f"{BASE}..HEAD", "--", *PRODUCT_PATHS)
+    results: list[tuple[str, str]] = []
+    current_file = ""
+    for line in diff.splitlines():
+        if line.startswith("+++ b/"):
+            current_file = line[6:]
+        elif line.startswith("+") and not line.startswith("+++"):
+            results.append((current_file, line[1:]))
+    return results
 
 
 def _command_names(text: str) -> set[str]:
@@ -173,9 +191,14 @@ class SecurityNegativeTests(unittest.TestCase):
         for label, pattern in forbidden.items():
             with self.subTest(label=label):
                 if label == "shell plugin":
+                    lines_with_files = added_product_lines_with_files()
                     filtered = "\n".join(
-                        line for line in additions.splitlines()
-                        if not any(ctx in line for ctx in REVIEWED_SPAWN_CONTEXTS)
+                        line
+                        for file_path, line in lines_with_files
+                        if not any(
+                            ctx_file in file_path and ctx_sub in line
+                            for ctx_file, ctx_sub in REVIEWED_SPAWN_CONTEXTS
+                        )
                     )
                     self.assertIsNone(re.search(pattern, filtered, re.IGNORECASE))
                 else:
