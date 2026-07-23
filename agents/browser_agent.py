@@ -324,11 +324,6 @@ def handle(action: str, data: dict):
         result = _friendly_browser_action_result("find_text", find_text_on_page(text))
         return _save_browser_state("find_text", result)
 
-    if action == "click_text":
-        text = data.get("text", "")
-        result = click_by_text(text)
-        return _save_browser_state("click_text", result)
-
     if action == "click_selector":
         selector = data.get("selector", "")
         result = click_selector(selector)

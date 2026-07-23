@@ -73,7 +73,7 @@ After every edit, run in this exact order:
 
 1. `python -m py_compile <every changed .py file>`
 2. `python -m py_compile LocalComet_Control_Panel.py`
-3. `python tools\localcomet_preflight_audit.py --include-tools`
+3. `python tools\localcomet_preflight_audit.py`  <!-- the audit always scans tools/; there is no --include-tools flag -->
 4. `python -c "from modules.computer_use_core_ru import dispatch; r=dispatch('pc computer contracts'); print(r); assert r['ok']"`
 5. `python -c "from modules.strict_project_stability_ru import dispatch; r=dispatch('проверь проект'); assert r['ok'] and r['summary']['hard_failures'] == 0 and r['summary']['warnings'] == 0"`
 

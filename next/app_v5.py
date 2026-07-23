@@ -11,6 +11,7 @@ from core.executor import execute
 from core.state import set_value, get_value
 from modules.history_log import append_log
 from modules.browser_direct import browser_action_direct_plan
+from localcomet_version import VERSION, PRODUCT_NAME
 
 
 try:
@@ -21,7 +22,7 @@ except Exception:
 
 
 print("=" * 40)
-print(" LocalComet v6.02 - Command Center Control Panel ")
+print(f" {PRODUCT_NAME} {VERSION} - Command Center Control Panel ")
 print("=" * 40)
 
 

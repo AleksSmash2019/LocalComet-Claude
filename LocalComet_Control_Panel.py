@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
-LOCALCOMET_VERSION = "v6.82"
-LOCALCOMET_VERSION_LABEL = "LocalComet v6.82 - Explainable Task Planner & Approval Gate"
+# Canonical product version literal. Parsed from source by regex (~10 modules
+# + gate 4); keep as a simple string literal (do not import or compute).
+LOCALCOMET_VERSION = "v6.84.5.1"
+LOCALCOMET_VERSION_LABEL = "LocalComet v6.84.5.1 - Explainable Task Planner & Approval Gate"
 LEGACY_CONTROL_PANEL_RETIRED_RU_V650G = "v6.50g legacy tabbed control panel retired; launches new Computer Use menu only"
 NEW_MENU_PATCH_COMMAND_BRIDGE_RU_V650J = "v6.50j route Patch Panel commands through new Computer Use menu"
 COMPUTER_USE_FULL_CONTROL_MISSION_RU_V651 = "v6.51 управляй пк first-class Computer Use route"
@@ -994,7 +996,7 @@ def _run_task_planner_command_ru_v682(command):
         result = {
             "ok": False,
             "mode": "explainable_task_plan",
-            "version": "v6.82",
+            "version": "v6.84.5.1",
             "warnings": [f"task_planner_error:{type(exc).__name__}"],
         }
     return {

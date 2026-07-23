@@ -15,7 +15,7 @@ REPORT_DIR = ROOT_PATH / "Projects" / "Reports" / "command_explorer"
 
 BLOCKED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist",
                 "build", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-                "BrowserProfile", "Backups"}
+                "BrowserProfile", "legacy", "Backups"}
 
 
 def _now() -> str:

@@ -1,4 +1,6 @@
+import os
 import subprocess
+import sys
 from pathlib import Path
 from modules.project_paths import projects_dir
 
@@ -58,11 +60,18 @@ def open_report(path: str):
 
     remember_report(path)
 
+    if sys.platform == "win32":
+        try:
+            os.startfile(str(report_path))
+            return f"Открыл отчет: {report_path}"
+        except OSError:
+            pass
+
     try:
-        subprocess.Popen(["code", str(report_path)], shell=True)
+        subprocess.Popen(["code", str(report_path)])
         return f"Открыл отчет в VS Code: {report_path}"
-    except Exception:
-        subprocess.Popen(["notepad", str(report_path)], shell=True)
+    except OSError:
+        subprocess.Popen(["notepad", str(report_path)])
         return f"Открыл отчет в Блокноте: {report_path}"
 
 

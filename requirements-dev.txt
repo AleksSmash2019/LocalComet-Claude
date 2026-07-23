@@ -1,0 +1,13 @@
+# GR-01 Phase 5 - dependencies for the offline pytest suite (gate 6).
+# Pinned to the versions used to validate GR-01 Phases 3-5.
+#
+# NOTE:
+#   - pytest is a dev/test-only tool.
+#   - json_repair and requests are RUNTIME dependencies of LocalComet
+#     (core/planner.py and core/llm.py); they are listed here so the offline
+#     test environment can import the core modules. They are not introduced by
+#     the test suite.
+# Install:  python -m pip install -r requirements-dev.txt
+pytest==8.4.2
+json_repair==0.44.1
+requests==2.32.5

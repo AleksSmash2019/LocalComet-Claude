@@ -1,14 +1,16 @@
 import requests
 
+from typing import Any
+
 from config import LMSTUDIO_API, MODEL
 
 try:
     from core.project_context import build_system_prompt
-except Exception:
+except (ImportError, AttributeError):
     build_system_prompt = None
 
 
-def _apply_no_think(user_text: str):
+def _apply_no_think(user_text: str) -> str:
     text = str(user_text or "").strip()
 
     lower = text.lower()
@@ -22,27 +24,27 @@ def _apply_no_think(user_text: str):
 LLM_OFFLINE_ERROR_PREFIX = "LLM_OFFLINE_ERROR:"
 
 
-def format_llm_offline_message(error=None):
+def format_llm_offline_message(error: Any = None) -> str:
     return (
         "LLM server is offline. Start LM Studio Local Server at "
         "http://127.0.0.1:1234 and try again."
     )
 
 
-def is_llm_offline_error(value):
+def is_llm_offline_error(value: Any) -> bool:
     text = str(value or "")
     return text.startswith(LLM_OFFLINE_ERROR_PREFIX) or text == format_llm_offline_message()
 
 
 def ask_llm(
-    system,
-    user,
-    max_tokens=400,
-    use_context=False,
-    no_think=True,
-    temperature=0.1,
-    timeout=300
-):
+    system: str,
+    user: str,
+    max_tokens: int = 400,
+    use_context: bool = False,
+    no_think: bool = True,
+    temperature: float = 0.1,
+    timeout: int = 300
+) -> str:
     """
     Главная функция запроса к LM Studio.
 
@@ -94,9 +96,5 @@ def ask_llm(
         data = response.json()
 
         return data["choices"][0]["message"]["content"]
-    except (
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        requests.exceptions.RequestException,
-    ) as e:
+    except requests.exceptions.RequestException as e:
         return format_llm_offline_message(e)

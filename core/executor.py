@@ -1,3 +1,5 @@
+from typing import Any
+
 from agents import browser_agent
 from agents import code_agent
 from agents import file_agent
@@ -18,7 +20,7 @@ from agents import automation_agent
 from agents import gpt_browser_agent
 
 
-def execute(plan):
+def execute(plan: Any) -> Any:
     if plan is None:
         return "Executor: пустой план."
 
@@ -87,7 +89,7 @@ def execute(plan):
                 from modules.browser_profile_ignore import close_gpt_browser_context
 
                 close_gpt_browser_context()
-            except Exception:
+            except (ImportError, OSError):
                 pass
 
         return chatgpt_relay_agent.handle(action, plan)
