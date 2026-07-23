@@ -1,5 +1,6 @@
 import json
 from json_repair import repair_json
+from typing import Any, Iterable, Optional
 from core.llm import ask_llm, is_llm_offline_error, format_llm_offline_message
 from modules.browser_direct import browser_action_direct_plan
 from modules.natural_command_intents import natural_command_plan
@@ -491,7 +492,7 @@ Return JSON only.
 }
 
 
-def _strip_browser_prefix(user):
+def _strip_browser_prefix(user: Any) -> str:
     text = str(user or "").strip()
     lower = text.lower()
 
@@ -502,7 +503,7 @@ def _strip_browser_prefix(user):
     return text
 
 
-def _extract_after(text, markers):
+def _extract_after(text: str, markers: Iterable[str]) -> str:
     lower = text.lower()
 
     for marker in markers:
@@ -514,11 +515,11 @@ def _extract_after(text, markers):
     return ""
 
 
-def _browser_direct_plan(user):
+def _browser_direct_plan(user: Any) -> Optional[dict]:
     return browser_action_direct_plan(user)
 
 
-def _voice_direct_plan(user):
+def _voice_direct_plan(user: Any) -> Optional[dict]:
     text = str(user or "").strip()
     lower = text.lower()
 
@@ -537,7 +538,7 @@ def _voice_direct_plan(user):
     return None
 
 
-def plan(user, route_name="unknown"):
+def plan(user: Any, route_name: str = "unknown") -> Any:
     voice = _voice_direct_plan(user)
 
     if voice:

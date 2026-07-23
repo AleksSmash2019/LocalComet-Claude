@@ -23,7 +23,7 @@ Never explain.
 """
 
 
-def run_loop(task: str, max_steps: int = 5):
+def run_loop(task: str, max_steps: int = 5) -> str:
     import json
     from json_repair import repair_json
 
