@@ -41,10 +41,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create sidecar placeholder for tauri_build
+        working-directory: desktop/localcomet-desktop/src-tauri
+        run: |
+          New-Item -ItemType Directory -Path binaries -Force | Out-Null
+          Set-Content -Path "binaries/localcomet-core-x86_64-pc-windows-msvc.exe" -Value "" -NoNewline
+
       - name: Run Rust tests
         working-directory: desktop/localcomet-desktop/src-tauri
-        # --no-default-features skips custom-protocol (production bundle validation)
-        # which requires gitignored binaries/ generated at installer build time.
+        # --no-default-features skips custom-protocol (production bundle validation).
+        # Placeholder above satisfies tauri_build externalBin existence check.
         # Test count is identical: 131 passed with or without the flag.
         run: cargo test --no-default-features -q
 
