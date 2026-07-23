@@ -19,13 +19,19 @@ def _llm(monkeypatch, module, response):
 
 class TestPlannerJsonFallback:
     def test_invalid_json_returns_safe_plan(self, monkeypatch):
-        _llm(monkeypatch, planner, "this is not json at all {{{")
-        result = planner.plan("test command", "unknown")
+        monkeypatch.setattr(planner, "natural_command_plan", lambda *a: None)
+        monkeypatch.setattr(planner, "_browser_direct_plan", lambda *a: None)
+        monkeypatch.setattr(planner, "_voice_direct_plan", lambda *a: None)
+        _llm(monkeypatch, planner, "not json [[[")
+        result = planner.plan("test command", "system")
         assert result["tool"] == "none"
         assert result["action"] == "answer"
         assert "text" in result
 
     def test_valid_json_still_works(self, monkeypatch):
+        monkeypatch.setattr(planner, "natural_command_plan", lambda *a: None)
+        monkeypatch.setattr(planner, "_browser_direct_plan", lambda *a: None)
+        monkeypatch.setattr(planner, "_voice_direct_plan", lambda *a: None)
         _llm(monkeypatch, planner, '{"tool": "system", "action": "help"}')
         result = planner.plan("help", "system")
         assert result["tool"] == "system"

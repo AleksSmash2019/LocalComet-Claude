@@ -39,6 +39,9 @@ def observe_page(page_text: str):
         print(f"[observer] JSON parse error: {str(e)[:200]}", file=sys.stderr)
         return {"summary": "", "good": [], "problems": [], "score": 0}
 
+    if not isinstance(data, dict):
+        return {"summary": "", "good": [], "problems": [], "score": 0}
+
     return {
         "summary": data.get("summary", ""),
         "good": data.get("good", []),

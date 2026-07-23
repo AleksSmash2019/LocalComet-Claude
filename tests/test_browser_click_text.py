@@ -6,16 +6,30 @@ handler is reachable.
 
 Uses careful sys.modules cleanup to avoid polluting the agents package
 namespace (test_executor.py injects fake agents via sys.modules).
+Mocks playwright so no real browser dependency is needed.
 """
 import sys
+import types
 
 import pytest
+
+
+def _ensure_playwright_mock():
+    if "playwright" not in sys.modules:
+        pw = types.ModuleType("playwright")
+        sync_api = types.ModuleType("playwright.sync_api")
+        sync_api.sync_playwright = lambda: None
+        pw.sync_api = sync_api
+        sys.modules["playwright"] = pw
+        sys.modules["playwright.sync_api"] = sync_api
 
 
 @pytest.fixture
 def browser_env(monkeypatch, tmp_path):
     import core.state as st
     monkeypatch.setattr(st, "STATE_FILE", tmp_path / "state.json")
+
+    _ensure_playwright_mock()
 
     saved_mod = sys.modules.pop("agents.browser_agent", None)
     saved_attr = None
