@@ -61,3 +61,22 @@ def test_set_value_persists_unicode(tmp_state):
     state.set_value("рус", "привет")
     assert state.get_value("рус") == "привет"
     assert "привет" in tmp_state.read_text(encoding="utf-8")
+
+
+def test_load_state_non_dict_json_returns_empty(tmp_state):
+    tmp_state.write_text('[1, 2, 3]', encoding="utf-8")
+    assert state.load_state() == {}
+
+
+def test_load_state_json_string_returns_empty(tmp_state):
+    tmp_state.write_text('"just a string"', encoding="utf-8")
+    assert state.load_state() == {}
+
+
+def test_save_state_oserror_does_not_raise(tmp_state, monkeypatch, capsys):
+    def _boom(*a, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(type(tmp_state), "write_text", _boom)
+    state.save_state({"k": "v"})
+    captured = capsys.readouterr()
+    assert "disk full" in captured.err

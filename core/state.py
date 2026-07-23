@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -13,16 +14,24 @@ def load_state() -> Dict[str, Any]:
         return {}
 
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
+    if not isinstance(data, dict):
+        return {}
+
+    return data
+
 
 def save_state(data: Dict[str, Any]) -> None:
-    STATE_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    try:
+        STATE_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+    except OSError as e:
+        print(f"[state] Не удалось сохранить state.json: {e}", file=sys.stderr)
 
 
 def set_value(key: str, value: Any) -> None:

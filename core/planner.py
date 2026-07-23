@@ -1,4 +1,5 @@
 import json
+import sys
 from json_repair import repair_json
 from typing import Any, Iterable, Optional
 from core.llm import ask_llm, is_llm_offline_error, format_llm_offline_message
@@ -569,4 +570,14 @@ def plan(user: Any, route_name: str = "unknown") -> Any:
     answer = answer.replace("```json", "").replace("```", "").strip()
 
     fixed = repair_json(answer)
-    return json.loads(fixed)
+
+    try:
+        parsed = json.loads(fixed)
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"[planner] JSON parse error: {str(e)[:200]}", file=sys.stderr)
+        return {"tool": "none", "action": "answer", "text": "Не удалось разобрать ответ модели."}
+
+    if not isinstance(parsed, dict):
+        return {"tool": "none", "action": "answer", "text": "Не удалось разобрать ответ модели."}
+
+    return parsed
