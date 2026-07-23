@@ -17,7 +17,7 @@ CURRENT_VERSION = "v6.59"
 
 BLOCKED_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist",
                 "build", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-                "BrowserProfile", "Backups", "LocalAgent_Backups"}
+                "BrowserProfile", "legacy", "Backups", "LocalAgent_Backups"}
 
 BLOCKED_PREFIXES = {".", "_backup", "backup_", "opencode_backup"}
 
