@@ -203,6 +203,7 @@ def draft_patch(goal: str) -> dict[str, Any]:
     slug = _safe_slug(raw_goal)
     draft_path = DRAFT_DIR / f"response_agent_draft_{stamp}_{slug}.json"
     installer_path = f"tools/install_ai_agent_draft_marker_{stamp}.py"
+    installer_win = installer_path.replace('/', '\\\\')
 
     draft = {
         "summary": (
@@ -218,8 +219,8 @@ def draft_patch(goal: str) -> dict[str, Any]:
             }
         ],
         "tests": [
-            f"python {installer_path.replace('/', '\\\\')}",
-            f"python -m py_compile {installer_path.replace('/', '\\\\')}",
+            f"python {installer_win}",
+            f"python -m py_compile {installer_win}",
             "python -c \"from pathlib import Path; files=list(Path('Projects/AgentMemory/applied_drafts').glob('agent_draft_marker_*.json')); assert files; print(files[-1])\"",
         ],
     }

@@ -3,7 +3,7 @@ from tkinter import ttk
 
 
 def build_command_center(panel, parent, style_text, button_grid, colors):
-    """Build the LocalComet v6.02 Command Center.
+    """Build the LocalComet v6.84.5.1 Command Center.
 
     Emergency-safe UI-only module. It calls existing panel methods and does not
     modify backend, router, config, apply/validate logic, or browser bridge behavior.
@@ -216,7 +216,7 @@ def build_command_center(panel, parent, style_text, button_grid, colors):
     title_area.pack(side="left", fill="y", padx=14)
     tk.Label(
         title_area,
-        text="🚀 LocalComet v6.02",
+        text="🚀 LocalComet v6.84.5.1",
         fg="#ffffff",
         bg="#1a1d22",
         font=("Segoe UI", 15, "bold"),
@@ -419,7 +419,7 @@ def build_command_center(panel, parent, style_text, button_grid, colors):
     console_body.grid(row=1, column=0, sticky="ew", pady=(6, 0))
     console_body.insert(
         "1.0",
-        "Command Center v6.02 готов.\n"
+        "Command Center v6.84.5.1 готов.\n"
         "1. Опиши задачу.\n"
         "2. Нажми REQUEST + CHATGPT.\n"
         "3. Скачай response.json.\n"
