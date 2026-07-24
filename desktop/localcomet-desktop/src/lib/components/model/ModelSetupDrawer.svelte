@@ -7,6 +7,7 @@
     connectSelectedManagedModel,
     discoverModels,
     inferenceBusy,
+    managedModelReady,
     managedRuntimeStore,
     modelGatewayStore,
     probeGateway,
@@ -36,10 +37,16 @@
   $: managedState = $managedRuntimeStore.status?.state ?? 'NotInstalled';
   $: managedSelectedModel = $managedRuntimeStore.catalog.find((m) => m.model_id === $managedRuntimeStore.selectedModelId);
   $: managedModelLaunchable = $managedRuntimeStore.readiness?.model_id === managedSelectedModel?.model_id && $managedRuntimeStore.readiness?.launchable === true;
+  $: managedConnecting = managedState === 'Starting' || managedState === 'Validating';
   $: canStartManaged = !$inferenceBusy && Boolean(managedSelectedModel) && managedModelLaunchable && (managedState === 'Stopped' || managedState === 'Failed');
   $: canStopManaged = !$inferenceBusy && (managedState === 'Ready' || managedState === 'Starting' || managedState === 'Validating' || managedState === 'Failed');
-  $: canBindManaged = !$inferenceBusy && managedModelLaunchable && ['Stopped', 'Failed', 'Ready'].includes(managedState) && Boolean($managedRuntimeStore.selectedModelId);
-  $: managedTone = managedState === 'Ready' ? 'ready' : managedState === 'Failed' ? 'danger' : managedState === 'Starting' || managedState === 'Validating' || managedState === 'Stopping' ? 'info' : 'disabled';
+  $: canBindManaged = !$inferenceBusy && !managedConnecting && managedModelLaunchable && ['Stopped', 'Failed', 'Ready'].includes(managedState) && Boolean($managedRuntimeStore.selectedModelId);
+  $: managedTone = managedState === 'Ready' ? 'ready' : managedState === 'Failed' ? 'danger' : managedConnecting || managedState === 'Stopping' ? 'info' : 'disabled';
+
+  // Auto-close drawer when model becomes ready after connecting.
+  $: if ($managedModelReady && managedConnecting) {
+    closeModelSetup();
+  }
 
   function onPortInput(event: Event) {
     const value = (event.currentTarget as HTMLInputElement).value;
@@ -292,7 +299,7 @@
               onclick={onConfirmManagedBinding}
             >
               <Icon name="link" size={16} />
-              <span>{$t('setup.connect')}</span>
+              <span>{managedConnecting ? $t('setup.connecting') : managedState === 'Failed' ? $t('setup.retry') : $t('setup.connect')}</span>
             </button>
 
             {#if $managedRuntimeStore.binding}

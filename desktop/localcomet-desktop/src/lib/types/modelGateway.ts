@@ -312,14 +312,21 @@ export interface ModelReadinessSummary extends ManagedCatalogIdentity {
 }
 
 export interface ManagedRuntimeStartResponse {
-  readonly state: 'Ready';
-  readonly model_state: 'Ready';
-  readonly inference_ready: true;
+  readonly state: 'Ready' | 'Starting';
+  readonly model_state: 'Ready' | 'Loading';
+  readonly inference_ready: boolean;
   readonly provider_id: 'managed-llama-cpp';
   readonly model_id: string;
   readonly model_display_name: string;
   readonly runtime_instance_id: string;
   readonly runtime_instance_fingerprint: string;
+}
+
+export interface ManagedRuntimeChangedEvent {
+  readonly state: 'Ready' | 'Failed';
+  readonly model_id: string;
+  readonly error_code: string | null;
+  readonly error_message: string | null;
 }
 
 export interface ManagedRuntimeLogs {

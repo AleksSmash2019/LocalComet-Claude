@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
@@ -41,6 +41,16 @@ const MAX_PROBE_BYTES: usize = 64 * 1024;
 const MODEL_LOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_DROP_WAIT_RESERVE: Duration = Duration::from_secs(2);
+
+pub const MANAGED_RUNTIME_EVENT_CHANNEL: &str = "localcomet://managed-runtime-changed";
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ManagedRuntimeChangedEvent {
+    pub state: ManagedRuntimeState,
+    pub model_id: String,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
 const REQUIRED_FLAGS: &[&str] = &[
     "--model",
     "--host",
@@ -159,10 +169,10 @@ struct ActiveRuntime {
     _state_directory_handles: Vec<File>,
 }
 
-#[derive(Clone)]
-struct StartupAttempt {
-    generation: u64,
-    cancelled: Arc<AtomicBool>,
+#[derive(Clone, Debug)]
+pub struct StartupAttempt {
+    pub generation: u64,
+    pub cancelled: Arc<AtomicBool>,
 }
 
 impl StartupAttempt {
@@ -375,23 +385,25 @@ impl ManagedRuntimeSupervisor {
         Ok(())
     }
 
-    pub fn start(
+    /// Heavy work after begin_start: spawn process, wait for readiness, attach to sidecar.
+    /// Called from a background thread. Emits no events itself — the caller emits.
+    pub fn start_after_begin(
         &self,
         model_id: &str,
         bridge: &ControlPlaneBridge,
+        attempt: &StartupAttempt,
     ) -> Result<ManagedRuntimeStartResponse, BridgeError> {
-        let attempt = self.begin_start()?;
         let model_load_deadline = Instant::now() + MODEL_LOAD_TIMEOUT;
-        let response = match self.start_inner(model_id, model_load_deadline, &attempt) {
+        let response = match self.start_inner(model_id, model_load_deadline, attempt) {
             Ok(response) => response,
             Err(error) => {
-                return Err(self.settle_start_failure(&attempt, error, bridge, false));
+                return Err(self.settle_start_failure(attempt, error, bridge, false));
             }
         };
-        let attach = match self.attach_payload_for_attempt(&attempt) {
+        let attach = match self.attach_payload_for_attempt(attempt) {
             Ok(attach) => attach,
             Err(error) => {
-                return Err(self.settle_start_failure(&attempt, error, bridge, false));
+                return Err(self.settle_start_failure(attempt, error, bridge, false));
             }
         };
         let attach_response = remaining_model_load_timeout(model_load_deadline)
@@ -404,11 +416,11 @@ impl ManagedRuntimeSupervisor {
             });
         if let Err(error) = attach_response {
             let error = normalize_managed_attach_error(error);
-            return Err(self.settle_start_failure(&attempt, error, bridge, true));
+            return Err(self.settle_start_failure(attempt, error, bridge, true));
         }
-        match self.complete_start(&attempt) {
+        match self.complete_start(attempt) {
             Ok(()) => Ok(response),
-            Err(error) => Err(self.settle_start_failure(&attempt, error, bridge, true)),
+            Err(error) => Err(self.settle_start_failure(attempt, error, bridge, true)),
         }
     }
 
@@ -478,7 +490,7 @@ impl ManagedRuntimeSupervisor {
         Ok(response)
     }
 
-    fn begin_start(&self) -> Result<StartupAttempt, BridgeError> {
+    pub fn begin_start(&self) -> Result<StartupAttempt, BridgeError> {
         let _transition = self
             .transition
             .lock()
@@ -1899,6 +1911,7 @@ pub async fn managed_runtime_status(
 
 #[tauri::command]
 pub async fn managed_runtime_start(
+    app: AppHandle,
     runtime: State<'_, Arc<ManagedRuntimeSupervisor>>,
     bridge: State<'_, Arc<ControlPlaneBridge>>,
     model_id: String,
@@ -1908,11 +1921,48 @@ pub async fn managed_runtime_start(
     }
     let runtime = Arc::clone(&runtime);
     let bridge = Arc::clone(&bridge);
-    tauri::async_runtime::spawn_blocking(move || runtime.start(&model_id, &bridge))
-        .await
+    let model_id_clone = model_id.clone();
+
+    // begin_start is fast: acquires lock, checks guard, sets Starting state.
+    // If the runtime is already busy, this returns Err immediately.
+    let attempt = runtime.begin_start()?;
+
+    // Spawn the heavy work (process spawn + wait_ready + attach) in background.
+    std::thread::Builder::new()
+        .name("managed-runtime-start".into())
+        .spawn(move || {
+            let result = runtime.start_after_begin(&model_id_clone, &bridge, &attempt);
+            let event = match result {
+                Ok(response) => ManagedRuntimeChangedEvent {
+                    state: ManagedRuntimeState::Ready,
+                    model_id: response.model_id,
+                    error_code: None,
+                    error_message: None,
+                },
+                Err(error) => ManagedRuntimeChangedEvent {
+                    state: ManagedRuntimeState::Failed,
+                    model_id: model_id_clone,
+                    error_code: Some(error.code.clone()),
+                    error_message: Some(error.message.clone()),
+                },
+            };
+            let _ = app.emit(MANAGED_RUNTIME_EVENT_CHANNEL, &event);
+        })
         .map_err(|_| {
-            BridgeError::new("runtime_unavailable", "managed runtime start worker failed")
-        })?
+            BridgeError::new("runtime_unavailable", "managed runtime start thread spawn failed")
+        })?;
+
+    // Return immediately — the frontend will receive the final state via event.
+    Ok(ManagedRuntimeStartResponse {
+        state: ManagedRuntimeState::Starting,
+        model_state: ManagedModelState::Loading,
+        inference_ready: false,
+        provider_id: "managed-llama-cpp",
+        model_id,
+        model_display_name: String::new(),
+        runtime_instance_id: String::new(),
+        runtime_instance_fingerprint: String::new(),
+    })
 }
 
 #[tauri::command]
@@ -2178,5 +2228,51 @@ mod tests {
         assert!(result.is_err());
         assert!(started.elapsed() < Duration::from_millis(500));
         server.join().expect("join slow drip server");
+    }
+
+    #[test]
+    fn begin_start_returns_quickly_and_guards_double_start() {
+        let artifacts = Arc::new(ArtifactTrustService::new_for_test());
+        let supervisor = ManagedRuntimeSupervisor::new(artifacts);
+        let started = Instant::now();
+        let attempt = supervisor.begin_start();
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(attempt.is_ok());
+        // Second call while first is in progress must fail with "busy".
+        let second = supervisor.begin_start();
+        assert!(second.is_err());
+        let error: BridgeError = second.unwrap_err();
+        assert_eq!(error.code, "busy");
+    }
+
+    #[test]
+    fn failed_start_clears_startup_state_allowing_retry() {
+        let artifacts = Arc::new(ArtifactTrustService::new_for_test());
+        let supervisor = ManagedRuntimeSupervisor::new(artifacts);
+        let _attempt = supervisor.begin_start().expect("first begin_start");
+        // Simulate failure: manually clear startup state as settle_start_failure does.
+        {
+            let mut inner = supervisor.inner.lock().expect("lock");
+            inner.startup = None;
+            inner.state = ManagedRuntimeState::Failed;
+            inner.model_state = ManagedModelState::Failed;
+            inner.inference_ready = false;
+        }
+        // After failure, startup state is cleared — retry must succeed.
+        let retry = supervisor.begin_start();
+        assert!(retry.is_ok(), "retry after failure must succeed");
+    }
+
+    #[test]
+    fn status_state_is_validating_during_active_startup() {
+        let artifacts = Arc::new(ArtifactTrustService::new_for_test());
+        let supervisor = ManagedRuntimeSupervisor::new(artifacts);
+        let _attempt = supervisor.begin_start().expect("begin_start");
+        // Verify inner state is Validating (set by begin_start) without needing a bridge.
+        let inner = supervisor.inner.lock().expect("lock");
+        assert_eq!(inner.state, ManagedRuntimeState::Validating);
+        assert_eq!(inner.model_state, ManagedModelState::Validating);
+        assert!(!inner.inference_ready);
+        assert!(inner.startup.is_some());
     }
 }

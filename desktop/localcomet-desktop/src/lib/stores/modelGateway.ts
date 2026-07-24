@@ -15,6 +15,7 @@ import {
   startManagedRuntime,
   startModelTurn,
   stopManagedRuntime,
+  subscribeManagedRuntimeChanged,
   subscribeModelGatewayEvents
 } from '$lib/bridge/modelGateway';
 import type {
@@ -141,6 +142,8 @@ const initialInferenceState: InferenceRequestState = {
 };
 
 let unsubscribeEvents: (() => void) | null = null;
+let unsubscribeManagedRuntime: (() => void) | null = null;
+let managedStartTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 let initialized = false;
 let initializationPromise: Promise<void> | null = null;
 let eventSubscriptionPromise: Promise<void> | null = null;
@@ -180,6 +183,8 @@ export async function initializeModelGateway(): Promise<void> {
     try {
       await ensureModelEventSubscription();
       if (generation !== subscriptionGeneration) return;
+      await ensureManagedRuntimeSubscription();
+      if (generation !== subscriptionGeneration) return;
       const catalog = await getModelGatewayCatalog();
       if (generation !== subscriptionGeneration) return;
       modelGatewayStore.update((state) => ({ ...state, catalog, initialized: true, status: 'Binding required' }));
@@ -205,6 +210,9 @@ export function shutdownModelGateway(): void {
   subscriptionGeneration += 1;
   unsubscribeEvents?.();
   unsubscribeEvents = null;
+  unsubscribeManagedRuntime?.();
+  unsubscribeManagedRuntime = null;
+  if (managedStartTimeoutTimer) { clearTimeout(managedStartTimeoutTimer); managedStartTimeoutTimer = null; }
   eventSubscriptionPromise = null;
   initializationPromise = null;
   stopManagedHealthMonitor();
@@ -230,6 +238,58 @@ async function ensureModelEventSubscription(): Promise<void> {
     await pendingSubscription;
   } finally {
     if (eventSubscriptionPromise === pendingSubscription) eventSubscriptionPromise = null;
+  }
+}
+
+async function ensureManagedRuntimeSubscription(): Promise<void> {
+  if (unsubscribeManagedRuntime) return;
+  const generation = subscriptionGeneration;
+  const cleanup = await subscribeManagedRuntimeChanged((event) => {
+    if (generation !== subscriptionGeneration) return;
+    handleManagedRuntimeChanged(event);
+  });
+  if (generation !== subscriptionGeneration) {
+    cleanup();
+    return;
+  }
+  unsubscribeManagedRuntime = cleanup;
+}
+
+function handleManagedRuntimeChanged(event: { state: 'Ready' | 'Failed'; model_id: string; error_code: string | null; error_message: string | null }): void {
+  // Late event after timeout: still honor it (requirement: Ready after timeout → connected).
+  if (managedStartTimeoutTimer) { clearTimeout(managedStartTimeoutTimer); managedStartTimeoutTimer = null; }
+
+  if (event.state === 'Ready') {
+    managedRuntimeStore.update((current) => ({
+      ...current,
+      status: current.status ? {
+        ...current.status,
+        state: 'Ready' as ManagedRuntimeState,
+        model_state: 'Ready',
+        inference_ready: true,
+        model_id: event.model_id
+      } : current.status,
+      lastError: null
+    }));
+    // Refresh full status and confirm binding asynchronously.
+    void refreshManagedRuntimeStatus().then(() => confirmManagedBinding());
+  } else {
+    managedRuntimeStore.update((current) => ({
+      ...current,
+      status: current.status ? {
+        ...current.status,
+        state: 'Failed' as ManagedRuntimeState,
+        model_state: 'Failed',
+        inference_ready: false
+      } : current.status,
+      binding: null,
+      lastError: {
+        code: event.error_code ?? 'runtime_start_failed',
+        message: event.error_message ?? 'Managed runtime failed to start'
+      }
+    }));
+    clearManagedGatewayBinding();
+    void refreshManagedRuntimeStatus();
   }
 }
 
@@ -516,8 +576,24 @@ export async function startSelectedManagedRuntime(): Promise<void> {
       lastError: null
     }));
     clearManagedGatewayBinding();
+    // Command returns immediately with Starting; final state arrives via event.
     await startManagedRuntime(state.selectedModelId);
-    await refreshManagedRuntimeStatus();
+    // Safety timeout: if event is lost, show error after 330s (backend timeout is 300s).
+    if (managedStartTimeoutTimer) clearTimeout(managedStartTimeoutTimer);
+    managedStartTimeoutTimer = setTimeout(() => {
+      managedStartTimeoutTimer = null;
+      const current = get(managedRuntimeStore);
+      if (current.status?.state === 'Starting' || current.status?.state === 'Validating') {
+        managedRuntimeStore.update((s) => ({
+          ...s,
+          status: s.status ? { ...s.status, state: 'Failed' as ManagedRuntimeState, model_state: 'Failed', inference_ready: false } : s.status,
+          binding: null,
+          lastError: { code: 'start_timed_out', message: 'Model start timed out — the event may have been lost. Press Retry.' }
+        }));
+        clearManagedGatewayBinding();
+        void refreshManagedRuntimeStatus();
+      }
+    }, 330_000);
   } catch (error) {
     const normalized = normalizeGatewayError(error);
     await refreshManagedRuntimeStatus();
@@ -605,20 +681,17 @@ export async function connectSelectedManagedModel(): Promise<boolean> {
       state.status.model_state === 'Ready' &&
       state.status.inference_ready === true &&
       state.status.model_id === state.selectedModelId;
-    if (!runningSelectedModel) {
-      if (state.status?.state === 'Ready') await stopSelectedManagedRuntime();
-      await startSelectedManagedRuntime();
+    if (runningSelectedModel) {
+      await confirmManagedBinding();
+      return get(managedModelReady);
     }
 
-    state = get(managedRuntimeStore);
-    if (
-      state.status?.state !== 'Ready' ||
-      state.status.model_state !== 'Ready' ||
-      state.status.inference_ready !== true ||
-      state.status.model_id !== state.selectedModelId
-    ) return false;
-    await confirmManagedBinding();
-    return get(managedModelReady);
+    // Not running: stop if needed, then start (returns immediately, event delivers final state).
+    if (state.status?.state === 'Ready') await stopSelectedManagedRuntime();
+    await startSelectedManagedRuntime();
+    // Final state arrives via managed-runtime-changed event → confirmManagedBinding.
+    // Return false here; the UI will react to the store update.
+    return false;
   } catch (error) {
     const normalized = normalizeGatewayError(error);
     managedRuntimeStore.update((current) => ({ ...current, binding: null, lastError: normalized }));

@@ -458,6 +458,23 @@ impl ArtifactTrustService {
         &self.roots
     }
 
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        let temp = std::env::temp_dir().join("localcomet-artifact-trust-test");
+        let _ = std::fs::create_dir_all(&temp);
+        Self {
+            catalog: ApprovedArtifactCatalog {
+                schema_version: 1,
+                catalog_id: "test".into(),
+                catalog_version: "0.0.0".into(),
+                runtimes: Vec::new(),
+                models: Vec::new(),
+            },
+            catalog_digest: "0".repeat(64),
+            roots: ManagedArtifactRoots::from_application_data_root(&temp),
+        }
+    }
+
     pub(crate) fn guard_runtime_state_root(&self) -> Result<Vec<File>, ArtifactTrustError> {
         open_directory_guard_chain(&self.roots.app_data_root, &self.roots.state_root, true)
     }

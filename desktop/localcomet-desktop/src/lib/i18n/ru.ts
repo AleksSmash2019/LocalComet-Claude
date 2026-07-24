@@ -188,6 +188,8 @@ export const ru: TranslationMap = {
   'setup.no_system_instruction': 'Без системной инструкции',
   'setup.safe_mode': 'Безопасный режим LocalComet',
   'setup.connect': 'Подключить модель',
+  'setup.connecting': 'Подключение…',
+  'setup.retry': 'Повторить',
   'setup.binding_id': 'Идентификатор подключения',
   'setup.runtime_not_installed': 'Управляемый runtime пока не установлен.',
   'setup.install_available': 'Установка появится в следующем обновлении.',

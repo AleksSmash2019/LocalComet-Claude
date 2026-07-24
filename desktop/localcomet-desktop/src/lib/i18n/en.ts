@@ -188,6 +188,8 @@ export const en: TranslationMap = {
   'setup.no_system_instruction': 'No system instruction',
   'setup.safe_mode': 'LocalComet safe mode',
   'setup.connect': 'Connect model',
+  'setup.connecting': 'Connecting…',
+  'setup.retry': 'Retry',
   'setup.binding_id': 'Connection ID',
   'setup.runtime_not_installed': 'Managed runtime is not installed yet.',
   'setup.install_available': 'Installation will be available in a future update.',

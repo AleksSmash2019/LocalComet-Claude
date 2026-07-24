@@ -15,6 +15,7 @@ import type {
   ManagedModelCatalog,
   ManagedModelRemovalResult,
   ManagedRuntimeCatalog,
+  ManagedRuntimeChangedEvent,
   ManagedRuntimeLogs,
   ManagedRuntimeStartResponse,
   ManagedRuntimeStatus,
@@ -562,16 +563,22 @@ function validateManagedStart(value: unknown): ManagedRuntimeStartResponse {
     'runtime_instance_id',
     'runtime_instance_fingerprint'
   ]);
-  if (object.provider_id !== 'managed-llama-cpp' || object.state !== 'Ready' || object.model_state !== 'Ready' || object.inference_ready !== true) throw invalid();
+  if (object.provider_id !== 'managed-llama-cpp') throw invalid();
+  if (object.state !== 'Ready' && object.state !== 'Starting') throw invalid();
+  if (object.state === 'Ready' && (object.model_state !== 'Ready' || object.inference_ready !== true)) throw invalid();
   return {
-    state: 'Ready',
-    model_state: 'Ready',
-    inference_ready: true,
+    state: object.state === 'Ready' ? 'Ready' : 'Starting',
+    model_state: object.state === 'Ready' ? 'Ready' : 'Loading',
+    inference_ready: object.state === 'Ready',
     provider_id: 'managed-llama-cpp',
     model_id: validateArtifactId(String(object.model_id)),
     model_display_name: safeText(object.model_display_name, 192),
-    runtime_instance_id: patternString(object.runtime_instance_id, /^[0-9a-f]{32}$/),
-    runtime_instance_fingerprint: validateHash(object.runtime_instance_fingerprint)
+    runtime_instance_id: typeof object.runtime_instance_id === 'string' && object.runtime_instance_id
+      ? patternString(object.runtime_instance_id, /^[0-9a-f]{32}$/)
+      : '',
+    runtime_instance_fingerprint: typeof object.runtime_instance_fingerprint === 'string' && object.runtime_instance_fingerprint
+      ? validateHash(object.runtime_instance_fingerprint)
+      : ''
   };
 }
 
@@ -1026,4 +1033,24 @@ function sanitize(value: string): string {
 
 function bounded(value: string, limit: number): string {
   return value.slice(0, limit);
+}
+
+const MANAGED_RUNTIME_EVENT_CHANNEL = 'localcomet://managed-runtime-changed';
+
+export async function subscribeManagedRuntimeChanged(
+  callback: (event: ManagedRuntimeChangedEvent) => void
+): Promise<() => void> {
+  const cleanup = await listen<unknown>(MANAGED_RUNTIME_EVENT_CHANNEL, (event) => {
+    const payload = event.payload;
+    if (!isRecord(payload)) return;
+    const state = payload.state;
+    if (state !== 'Ready' && state !== 'Failed') return;
+    callback({
+      state,
+      model_id: typeof payload.model_id === 'string' ? bounded(payload.model_id, 96) : '',
+      error_code: typeof payload.error_code === 'string' ? bounded(payload.error_code, 64) : null,
+      error_message: typeof payload.error_message === 'string' ? bounded(sanitize(payload.error_message), 256) : null
+    });
+  });
+  return () => cleanup();
 }
