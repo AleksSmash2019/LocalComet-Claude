@@ -41,16 +41,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create sidecar placeholder for tauri_build
+      - name: Create runtime placeholders for tauri_build
         working-directory: desktop/localcomet-desktop/src-tauri
         run: |
-          New-Item -ItemType Directory -Path binaries -Force | Out-Null
+          New-Item -ItemType Directory -Path binaries/app -Force | Out-Null
+          New-Item -ItemType Directory -Path binaries/DLLs -Force | Out-Null
           Set-Content -Path "binaries/localcomet-core-x86_64-pc-windows-msvc.exe" -Value "" -NoNewline
+          Set-Content -Path "binaries/LICENSE.python.txt" -Value "" -NoNewline
+          Set-Content -Path "binaries/python3.dll" -Value "" -NoNewline
+          Set-Content -Path "binaries/python314.dll" -Value "" -NoNewline
+          Set-Content -Path "binaries/python314.zip" -Value "" -NoNewline
+          Set-Content -Path "binaries/runtime-manifest.tsv" -Value "" -NoNewline
+          Set-Content -Path "binaries/up00-runtime-manifest.json" -Value "{}" -NoNewline
+          Set-Content -Path "binaries/vcruntime140.dll" -Value "" -NoNewline
+          Set-Content -Path "binaries/vcruntime140_1.dll" -Value "" -NoNewline
 
       - name: Run Rust tests
         working-directory: desktop/localcomet-desktop/src-tauri
         # --no-default-features skips custom-protocol (production bundle validation).
-        # Placeholder above satisfies tauri_build externalBin existence check.
+        # Placeholders above satisfy tauri_build resource existence checks.
         # Test count is identical: 131 passed with or without the flag.
         run: cargo test --no-default-features -q
 
