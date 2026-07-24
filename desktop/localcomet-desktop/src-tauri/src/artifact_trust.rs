@@ -539,7 +539,7 @@ impl ArtifactTrustService {
         let cache_key: Option<Sha256CacheKey> = mtime_nanos.map(|mtime| (canonical.clone(), mtime, size));
 
         if let Some(ref key) = cache_key {
-            let cached = self.sha256_cache.lock().expect("sha256 cache poisoned").get(key).cloned();
+            let cached = self.sha256_cache.lock().unwrap_or_else(|p| p.into_inner()).get(key).cloned();
             if let Some(hash) = cached {
                 let dur_ms = start.elapsed().as_millis();
                 perf_log(&format!("sha256_file_cached HIT path={} dur_ms={dur_ms}", path.display()));
@@ -553,14 +553,14 @@ impl ArtifactTrustService {
         perf_log(&format!("sha256_file path={} dur_ms={dur_ms}", path.display()));
 
         if let Some(key) = cache_key {
-            self.sha256_cache.lock().expect("sha256 cache poisoned").insert(key, hash.clone());
+            self.sha256_cache.lock().unwrap_or_else(|p| p.into_inner()).insert(key, hash.clone());
         }
         Ok(hash)
     }
 
     /// Принудительная инвалидация кэша (при install/download/update артефакта).
     pub(crate) fn invalidate_sha256_cache(&self) {
-        self.sha256_cache.lock().expect("sha256 cache poisoned").clear();
+        self.sha256_cache.lock().unwrap_or_else(|p| p.into_inner()).clear();
     }
 
     pub(crate) fn guard_runtime_state_root(&self) -> Result<Vec<File>, ArtifactTrustError> {

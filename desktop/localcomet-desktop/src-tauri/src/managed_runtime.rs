@@ -9,10 +9,17 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
+
+/// Recover from a poisoned mutex instead of panicking.
+/// A poisoned lock means a thread panicked while holding it; the data
+/// is still structurally valid and safe to recover.
+fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
@@ -252,8 +259,8 @@ impl ManagedRuntimeSupervisor {
             let _transition = self
                 .transition
                 .lock()
-                .expect("managed runtime transition lock poisoned");
-            let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
+            let mut inner = lock_recover(&self.inner);
             if inner
                 .active
                 .as_ref()
@@ -276,7 +283,7 @@ impl ManagedRuntimeSupervisor {
         if let Some(active) = exited {
             let _ = bridge.request(ControlPlaneMethod::ModelManagedDetach, json!({}));
             Self::dispose_active(active, false, SHUTDOWN_TIMEOUT);
-            let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+            let mut inner = lock_recover(&self.inner);
             if inner.state == ManagedRuntimeState::Stopping && inner.active.is_none() {
                 inner.state = ManagedRuntimeState::Failed;
                 inner.model_state = ManagedModelState::Failed;
@@ -285,11 +292,11 @@ impl ManagedRuntimeSupervisor {
         }
 
         let runtime_in_use = {
-            let inner = self.inner.lock().expect("managed runtime lock poisoned");
+            let inner = lock_recover(&self.inner);
             inner.active.is_some() || inner.startup.is_some()
         };
         let runtime_installed = runtime_in_use || self.artifacts.has_valid_runtime();
-        let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+        let mut inner = lock_recover(&self.inner);
         if inner.active.is_none() && !runtime_installed {
             inner.state = ManagedRuntimeState::NotInstalled;
             inner.model_state = ManagedModelState::Unavailable;
@@ -322,17 +329,17 @@ impl ManagedRuntimeSupervisor {
     }
 
     pub fn logs(&self) -> ManagedRuntimeLogs {
-        let inner = self.inner.lock().expect("managed runtime lock poisoned");
+        let inner = lock_recover(&self.inner);
         let stdout_tail = inner
             .stdout_tail
             .lock()
-            .expect("stdout tail poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .lines
             .clone();
         let stderr_tail = inner
             .stderr_tail
             .lock()
-            .expect("stderr tail poisoned")
+            .unwrap_or_else(|p| p.into_inner())
             .lines
             .clone();
         ManagedRuntimeLogs {
@@ -345,8 +352,8 @@ impl ManagedRuntimeSupervisor {
         let _transition = self
             .transition
             .lock()
-            .expect("managed runtime transition lock poisoned");
-        let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
+        let mut inner = lock_recover(&self.inner);
         let process_running = inner
             .active
             .as_ref()
@@ -433,8 +440,8 @@ impl ManagedRuntimeSupervisor {
             let _transition = self
                 .transition
                 .lock()
-                .expect("managed runtime transition lock poisoned");
-            let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
+            let mut inner = lock_recover(&self.inner);
             if inner.state == ManagedRuntimeState::Stopping {
                 return Err(ManagedRuntimeError::new("busy", "managed runtime is stopping").into());
             }
@@ -467,7 +474,7 @@ impl ManagedRuntimeSupervisor {
                 deadline.saturating_duration_since(Instant::now()),
             );
         }
-        let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+        let mut inner = lock_recover(&self.inner);
         inner.runtime_version = None;
         inner.state = final_state;
         inner.model_state = ManagedModelState::Unavailable;
@@ -494,8 +501,8 @@ impl ManagedRuntimeSupervisor {
         let _transition = self
             .transition
             .lock()
-            .expect("managed runtime transition lock poisoned");
-        let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
+        let mut inner = lock_recover(&self.inner);
         if inner.active.is_some()
             || inner.startup.is_some()
             || matches!(
@@ -561,9 +568,9 @@ impl ManagedRuntimeSupervisor {
             let _transition = self
                 .transition
                 .lock()
-                .expect("managed runtime transition lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
             {
-                let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+                let mut inner = lock_recover(&self.inner);
                 if !startup_is_current(&inner, attempt) || attempt.is_cancelled() {
                     return Err(ManagedRuntimeError::new(
                         "start_cancelled",
@@ -595,7 +602,7 @@ impl ManagedRuntimeSupervisor {
                     .into());
                 }
             };
-            let inner = self.inner.lock().expect("managed runtime lock poisoned");
+            let inner = lock_recover(&self.inner);
             let stdout_tail = Arc::clone(&inner.stdout_tail);
             let stderr_tail = Arc::clone(&inner.stderr_tail);
             drop(inner);
@@ -646,7 +653,7 @@ impl ManagedRuntimeSupervisor {
                 None
             };
             let process = Arc::new(Mutex::new(process));
-            let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+            let mut inner = lock_recover(&self.inner);
             if !startup_is_current(&inner, attempt) || attempt.is_cancelled() {
                 drop(inner);
                 let active = ActiveRuntime {
@@ -712,7 +719,7 @@ impl ManagedRuntimeSupervisor {
     }
 
     fn attach_payload_for_attempt(&self, attempt: &StartupAttempt) -> Result<Value, BridgeError> {
-        let inner = self.inner.lock().expect("managed runtime lock poisoned");
+        let inner = lock_recover(&self.inner);
         if !startup_is_current(&inner, attempt) || attempt.is_cancelled() {
             return Err(ManagedRuntimeError::new(
                 "start_cancelled",
@@ -744,8 +751,8 @@ impl ManagedRuntimeSupervisor {
         let _transition = self
             .transition
             .lock()
-            .expect("managed runtime transition lock poisoned");
-        let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+            .unwrap_or_else(|p| p.into_inner());
+        let mut inner = lock_recover(&self.inner);
         let process_ready = inner.active.as_ref().is_some_and(|active| {
             active.startup_generation == attempt.generation
                 && managed_process_is_running(&active.process)
@@ -776,8 +783,8 @@ impl ManagedRuntimeSupervisor {
             let _transition = self
                 .transition
                 .lock()
-                .expect("managed runtime transition lock poisoned");
-            let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
+            let mut inner = lock_recover(&self.inner);
             if !startup_is_current(&inner, attempt) {
                 return ManagedRuntimeError::new(
                     "start_cancelled",
@@ -815,8 +822,8 @@ impl ManagedRuntimeSupervisor {
             let _transition = self
                 .transition
                 .lock()
-                .expect("managed runtime transition lock poisoned");
-            let mut inner = self.inner.lock().expect("managed runtime lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
+            let mut inner = lock_recover(&self.inner);
             if inner
                 .active
                 .as_ref()
@@ -846,7 +853,7 @@ impl ManagedRuntimeSupervisor {
             let process = active
                 .process
                 .lock()
-                .expect("managed runtime process lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
             if terminate && process.is_running() {
                 process.terminate(0);
             }
@@ -913,14 +920,14 @@ fn startup_is_current(inner: &ManagedRuntimeInner, attempt: &StartupAttempt) -> 
 fn managed_process_is_running(process: &Arc<Mutex<ContainedManagedRuntimeProcess>>) -> bool {
     process
         .lock()
-        .expect("managed runtime process lock poisoned")
+        .unwrap_or_else(|p| p.into_inner())
         .is_running()
 }
 
 fn terminate_managed_process(process: &Arc<Mutex<ContainedManagedRuntimeProcess>>, exit_code: u32) {
     let process = process
         .lock()
-        .expect("managed runtime process lock poisoned");
+        .unwrap_or_else(|p| p.into_inner());
     if process.is_running() {
         process.terminate(exit_code);
     }
@@ -1218,7 +1225,7 @@ fn wait_ready(
         let (running, process_id) = {
             let process = process
                 .lock()
-                .expect("managed runtime process lock poisoned");
+                .unwrap_or_else(|p| p.into_inner());
             (process.is_running(), process.process_id())
         };
         if !running {
@@ -1804,10 +1811,10 @@ fn spawn_log_reader(
                 if count == 0 {
                     break;
                 }
-                let mut guard = tail.lock().expect("managed log tail poisoned");
+                let mut guard = lock_recover(&tail);
                 consume_log_bytes(&mut carry, &buffer[..count], false, &markers, &mut guard);
             }
-            let mut guard = tail.lock().expect("managed log tail poisoned");
+            let mut guard = lock_recover(&tail);
             consume_log_bytes(&mut carry, &[], true, &markers, &mut guard);
         })
 }
@@ -2252,7 +2259,7 @@ mod tests {
         let _attempt = supervisor.begin_start().expect("first begin_start");
         // Simulate failure: manually clear startup state as settle_start_failure does.
         {
-            let mut inner = supervisor.inner.lock().expect("lock");
+            let mut inner = lock_recover(&supervisor.inner);
             inner.startup = None;
             inner.state = ManagedRuntimeState::Failed;
             inner.model_state = ManagedModelState::Failed;
@@ -2269,7 +2276,7 @@ mod tests {
         let supervisor = ManagedRuntimeSupervisor::new(artifacts);
         let _attempt = supervisor.begin_start().expect("begin_start");
         // Verify inner state is Validating (set by begin_start) without needing a bridge.
-        let inner = supervisor.inner.lock().expect("lock");
+        let inner = lock_recover(&supervisor.inner);
         assert_eq!(inner.state, ManagedRuntimeState::Validating);
         assert_eq!(inner.model_state, ManagedModelState::Validating);
         assert!(!inner.inference_ready);
