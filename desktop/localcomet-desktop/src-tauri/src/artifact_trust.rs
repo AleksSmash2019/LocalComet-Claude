@@ -45,6 +45,38 @@ const LLAMA_CPP_LICENSE_SOURCE_PATH: &str = "third_party/llama.cpp/LICENSE-MIT.t
 const LLAMA_CPP_LICENSE_BYTES: &[u8] =
     include_bytes!("../../../../third_party/llama.cpp/LICENSE-MIT.txt");
 
+/// PERF tracing: enabled by env LOCALCOMET_PERF=1 or debug build.
+/// If LOCALCOMET_PERF_LOG=<path> is set, appends lines to that file.
+#[cfg(debug_assertions)]
+fn perf_log(msg: &str) {
+    let enabled = std::env::var("LOCALCOMET_PERF").map(|v| v == "1").unwrap_or(false);
+    if !enabled {
+        return;
+    }
+    eprintln!("[PERF] {msg}");
+    if let Ok(log_path) = std::env::var("LOCALCOMET_PERF_LOG") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            let _ = writeln!(f, "[PERF] {msg}");
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn perf_log(msg: &str) {
+    let enabled = std::env::var("LOCALCOMET_PERF").map(|v| v == "1").unwrap_or(false);
+    if !enabled {
+        return;
+    }
+    eprintln!("[PERF] {msg}");
+    if let Ok(log_path) = std::env::var("LOCALCOMET_PERF_LOG") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            let _ = writeln!(f, "[PERF] {msg}");
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogStatus {
@@ -501,7 +533,7 @@ impl ArtifactTrustService {
 
         let cached = self.sha256_cache.lock().expect("sha256 cache poisoned").get(&key).cloned();
         if let Some(hash) = cached {
-            eprintln!("[PERF] sha256_file_cached HIT path={}", path.display());
+            perf_log(&format!("sha256_file_cached HIT path={} dur_ms=0", path.display()));
             return Ok(hash);
         }
 
@@ -2252,7 +2284,7 @@ fn sha256_file(path: &Path) -> Result<String, ArtifactTrustError> {
     }
     let result = format!("{:x}", hasher.finalize());
     let dur_ms = start.elapsed().as_millis();
-    eprintln!("[PERF] sha256_file path={} dur_ms={dur_ms}", path.display());
+    perf_log(&format!("sha256_file path={} dur_ms={dur_ms}", path.display()));
     Ok(result)
 }
 
