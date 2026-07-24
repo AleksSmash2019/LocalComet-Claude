@@ -63,8 +63,12 @@ jobs:
         working-directory: desktop/localcomet-desktop/src-tauri
         # --no-default-features skips custom-protocol (production bundle validation).
         # Placeholders above satisfy tauri_build resource existence checks.
-        # Test count is identical: 131 passed with or without the flag.
+        # Test count is identical: 135 passed with or without the flag.
         run: cargo test --no-default-features
+
+      - name: Clippy (deny warnings)
+        working-directory: desktop/localcomet-desktop/src-tauri
+        run: cargo clippy --no-default-features -- -D warnings
 
   frontend-tests:
     runs-on: windows-latest
@@ -81,6 +85,10 @@ jobs:
         working-directory: desktop/localcomet-desktop
         run: npm ci
 
-      - name: Run frontend tests
+      - name: Svelte check
+        working-directory: desktop/localcomet-desktop
+        run: npm run check
+
+      - name: Run frontend tests (vitest)
         working-directory: desktop/localcomet-desktop
         run: npm run test
