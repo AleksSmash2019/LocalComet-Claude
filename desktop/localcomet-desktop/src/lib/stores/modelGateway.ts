@@ -668,6 +668,8 @@ export async function confirmManagedBinding(): Promise<void> {
 export async function connectSelectedManagedModel(): Promise<boolean> {
   let state = get(managedRuntimeStore);
   if (!state.selectedModelId) return false;
+  // Guard: do not start a second parallel start attempt.
+  if (state.status?.state === 'Starting' || state.status?.state === 'Validating') return false;
   try {
     const readiness = await readManagedModelReadiness(state.selectedModelId);
     managedRuntimeStore.update((current) => ({ ...current, readiness, lastError: null }));
