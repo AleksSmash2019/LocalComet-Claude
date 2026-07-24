@@ -1456,6 +1456,14 @@ mod tests {
                 now_unix_ms()
             ));
             fs::create_dir(&root).expect("create Files test directory");
+            // Canonicalize to resolve short-name aliases (e.g. RUNNER~1 on CI),
+            // then strip verbatim prefix so tests can construct \\?\ paths cleanly.
+            let canonical = fs::canonicalize(&root).expect("canonicalize Files test directory");
+            let root = canonical
+                .to_str()
+                .and_then(|s| s.strip_prefix(r"\\?\"))
+                .map(PathBuf::from)
+                .unwrap_or(canonical);
             Self { root }
         }
 
