@@ -547,11 +547,11 @@ export async function refreshManagedRuntimeStatus(): Promise<void> {
   }
 }
 
-export async function startSelectedManagedRuntime(): Promise<void> {
+export async function startSelectedManagedRuntime(precomputedReadiness?: ModelReadinessSummary): Promise<void> {
   const state = get(managedRuntimeStore);
   if (!state.selectedModelId) return;
   try {
-    const readiness = await readManagedModelReadiness(state.selectedModelId);
+    const readiness = precomputedReadiness ?? await readManagedModelReadiness(state.selectedModelId);
     if (get(managedRuntimeStore).selectedModelId !== state.selectedModelId) return;
     if (!readiness.launchable) {
       managedRuntimeStore.update((current) => ({
@@ -690,7 +690,7 @@ export async function connectSelectedManagedModel(): Promise<boolean> {
 
     // Not running: stop if needed, then start (returns immediately, event delivers final state).
     if (state.status?.state === 'Ready') await stopSelectedManagedRuntime();
-    await startSelectedManagedRuntime();
+    await startSelectedManagedRuntime(readiness);
     // Final state arrives via managed-runtime-changed event → confirmManagedBinding.
     // Return false here; the UI will react to the store update.
     return false;

@@ -160,4 +160,14 @@ describe('Managed runtime connection state machine', () => {
     expect(callsAfter).toBe(callsBefore);
     expect(result).toBe(false);
   });
+
+  it('startSelectedManagedRuntime accepts precomputed readiness without error', async () => {
+    // Verify dedup: startSelectedManagedRuntime with precomputed readiness
+    // does not throw and transitions to Starting.
+    const precomputed = get(managedRuntimeStore).readiness;
+    expect(precomputed).not.toBeNull();
+    await startSelectedManagedRuntime(precomputed!);
+    expect(get(managedRuntimeStore).status?.state).toBe('Starting');
+    expect(invokeCalls.some((c) => c.command === 'managed_runtime_start')).toBe(true);
+  });
 });
