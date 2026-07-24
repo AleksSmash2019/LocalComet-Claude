@@ -1249,28 +1249,41 @@ pub fn managed_model_catalog(state: State<'_, Arc<ArtifactTrustService>>) -> Man
 }
 
 #[tauri::command]
-pub fn managed_installed_artifacts(
+pub async fn managed_installed_artifacts(
     state: State<'_, Arc<ArtifactTrustService>>,
-) -> ManagedInstalledArtifacts {
-    state.installed_artifacts()
+) -> Result<ManagedInstalledArtifacts, BridgeError> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || state.installed_artifacts())
+        .await
+        .map_err(|_| BridgeError::new("runtime_unavailable", "installed artifacts worker failed"))
 }
 
 #[tauri::command]
-pub fn managed_artifact_validation_status(
+pub async fn managed_artifact_validation_status(
     state: State<'_, Arc<ArtifactTrustService>>,
     artifact_id: String,
 ) -> Result<ArtifactValidationSummary, BridgeError> {
-    state
-        .artifact_validation_status(&artifact_id)
-        .map_err(BridgeError::from)
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        state
+            .artifact_validation_status(&artifact_id)
+            .map_err(BridgeError::from)
+    })
+    .await
+    .map_err(|_| BridgeError::new("runtime_unavailable", "artifact validation worker failed"))?
 }
 
 #[tauri::command]
-pub fn managed_model_readiness(
+pub async fn managed_model_readiness(
     state: State<'_, Arc<ArtifactTrustService>>,
     model_id: String,
 ) -> Result<ModelReadinessSummary, BridgeError> {
-    state.model_readiness(&model_id).map_err(BridgeError::from)
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        state.model_readiness(&model_id).map_err(BridgeError::from)
+    })
+    .await
+    .map_err(|_| BridgeError::new("runtime_unavailable", "model readiness worker failed"))?
 }
 
 fn parse_catalog(bytes: &[u8]) -> Result<ApprovedArtifactCatalog, ArtifactTrustError> {
