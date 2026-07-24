@@ -518,27 +518,43 @@ impl ArtifactTrustService {
     /// Perf-кэш: полный хеш вычисляется минимум один раз за сессию для каждого файла.
     /// Ключ: (canonical_path, mtime_nanos, size). При изменении mtime или size — повторный хеш.
     /// Не ослабляет trust: полный хеш минимум один раз за сессию.
+    /// TOCTOU fix: файл открывается один раз, metadata берётся с открытого дескриптора.
+    /// Если mtime недоступен — НЕ кэшируем (защита от stale hash при изменении без смены размера).
     pub(crate) fn sha256_file_cached(&self, path: &Path) -> Result<String, ArtifactTrustError> {
-        let metadata = fs::metadata(path)
+        let start = std::time::Instant::now();
+        let file = File::open(path)
             .map_err(|_| ArtifactTrustError::new("io_error", "hash input unavailable"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| ArtifactTrustError::new("io_error", "hash metadata unavailable"))?;
+        let size = metadata.len();
         let mtime_nanos = metadata
             .modified()
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        let size = metadata.len();
+            .map(|d| d.as_nanos() as u64);
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let key: Sha256CacheKey = (canonical, mtime_nanos, size);
 
-        let cached = self.sha256_cache.lock().expect("sha256 cache poisoned").get(&key).cloned();
-        if let Some(hash) = cached {
-            perf_log(&format!("sha256_file_cached HIT path={} dur_ms=0", path.display()));
-            return Ok(hash);
+        // If mtime unavailable — не кэшируем (защита от stale hash).
+        let cache_key: Option<Sha256CacheKey> = mtime_nanos.map(|mtime| (canonical.clone(), mtime, size));
+
+        if let Some(ref key) = cache_key {
+            let cached = self.sha256_cache.lock().expect("sha256 cache poisoned").get(key).cloned();
+            if let Some(hash) = cached {
+                let dur_ms = start.elapsed().as_millis();
+                perf_log(&format!("sha256_file_cached HIT path={} dur_ms={dur_ms}", path.display()));
+                return Ok(hash);
+            }
         }
 
-        let hash = sha256_file(path)?;
-        self.sha256_cache.lock().expect("sha256 cache poisoned").insert(key, hash.clone());
+        // Hash from the same open descriptor (TOCTOU fix).
+        let hash = sha256_file_from_handle(file)?;
+        let dur_ms = start.elapsed().as_millis();
+        perf_log(&format!("sha256_file path={} dur_ms={dur_ms}", path.display()));
+
+        if let Some(key) = cache_key {
+            self.sha256_cache.lock().expect("sha256 cache poisoned").insert(key, hash.clone());
+        }
         Ok(hash)
     }
 
@@ -2288,6 +2304,23 @@ fn sha256_file(path: &Path) -> Result<String, ArtifactTrustError> {
     Ok(result)
 }
 
+/// Hash from an already-open file handle (TOCTOU fix: metadata and hash from same descriptor).
+fn sha256_file_from_handle(file: File) -> Result<String, ArtifactTrustError> {
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_| ArtifactTrustError::new("io_error", "hash read failed"))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -3338,5 +3371,24 @@ mod tests {
         assert!(service
             .artifact_validation_status("unapproved-runtime")
             .is_err());
+    }
+
+    #[test]
+    fn sha256_cache_misses_on_mtime_change_without_size_change() {
+        let service = ArtifactTrustService::new_for_test();
+        let dir = std::env::temp_dir().join("localcomet-cache-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let file_path = dir.join("cache_test.bin");
+        std::fs::write(&file_path, b"AAAA").expect("write initial");
+        let hash1 = service.sha256_file_cached(&file_path).expect("first hash");
+        // Same content, same size — cache HIT expected.
+        let hash2 = service.sha256_file_cached(&file_path).expect("second hash");
+        assert_eq!(hash1, hash2, "same file must hit cache");
+        // Modify content with SAME SIZE but different content (mtime changes).
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&file_path, b"BBBB").expect("write modified same size");
+        let hash3 = service.sha256_file_cached(&file_path).expect("third hash");
+        assert_ne!(hash1, hash3, "modified file (same size, new mtime) must miss cache");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
