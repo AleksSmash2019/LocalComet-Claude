@@ -41,6 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Create runtime placeholders for tauri_build
         working-directory: desktop/localcomet-desktop/src-tauri
         shell: cmd
@@ -56,14 +58,13 @@ jobs:
           echo {} > binaries\up00-runtime-manifest.json
           type nul > binaries\vcruntime140.dll
           type nul > binaries\vcruntime140_1.dll
-          dir /s /b binaries
 
       - name: Run Rust tests
         working-directory: desktop/localcomet-desktop/src-tauri
         # --no-default-features skips custom-protocol (production bundle validation).
         # Placeholders above satisfy tauri_build resource existence checks.
         # Test count is identical: 131 passed with or without the flag.
-        run: cargo test --no-default-features -q
+        run: cargo test --no-default-features
 
   frontend-tests:
     runs-on: windows-latest
