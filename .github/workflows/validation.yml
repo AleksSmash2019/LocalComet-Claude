@@ -43,18 +43,20 @@ jobs:
 
       - name: Create runtime placeholders for tauri_build
         working-directory: desktop/localcomet-desktop/src-tauri
+        shell: cmd
         run: |
-          New-Item -ItemType Directory -Path binaries/app -Force | Out-Null
-          New-Item -ItemType Directory -Path binaries/DLLs -Force | Out-Null
-          Set-Content -Path "binaries/localcomet-core-x86_64-pc-windows-msvc.exe" -Value "" -NoNewline
-          Set-Content -Path "binaries/LICENSE.python.txt" -Value "" -NoNewline
-          Set-Content -Path "binaries/python3.dll" -Value "" -NoNewline
-          Set-Content -Path "binaries/python314.dll" -Value "" -NoNewline
-          Set-Content -Path "binaries/python314.zip" -Value "" -NoNewline
-          Set-Content -Path "binaries/runtime-manifest.tsv" -Value "" -NoNewline
-          Set-Content -Path "binaries/up00-runtime-manifest.json" -Value "{}" -NoNewline
-          Set-Content -Path "binaries/vcruntime140.dll" -Value "" -NoNewline
-          Set-Content -Path "binaries/vcruntime140_1.dll" -Value "" -NoNewline
+          mkdir binaries\app
+          mkdir binaries\DLLs
+          type nul > binaries\localcomet-core-x86_64-pc-windows-msvc.exe
+          type nul > binaries\LICENSE.python.txt
+          type nul > binaries\python3.dll
+          type nul > binaries\python314.dll
+          type nul > binaries\python314.zip
+          type nul > binaries\runtime-manifest.tsv
+          echo {} > binaries\up00-runtime-manifest.json
+          type nul > binaries\vcruntime140.dll
+          type nul > binaries\vcruntime140_1.dll
+          dir /s /b binaries
 
       - name: Run Rust tests
         working-directory: desktop/localcomet-desktop/src-tauri
