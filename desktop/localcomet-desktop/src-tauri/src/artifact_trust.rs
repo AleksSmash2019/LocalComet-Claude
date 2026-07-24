@@ -4,12 +4,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
@@ -425,10 +425,16 @@ pub(crate) enum ApprovedDownloadArtifact {
     Model(ApprovedModelArtifact),
 }
 
+/// Perf-кэш SHA-256 по (canonical_path, mtime, size). Не ослабляет trust:
+/// полный хеш вычисляется минимум один раз за сессию для каждого файла.
+/// Кэш только in-memory, не персистируется. Инвалидация при install/download/update.
+type Sha256CacheKey = (PathBuf, u64, u64);
+
 pub struct ArtifactTrustService {
     catalog: ApprovedArtifactCatalog,
     catalog_digest: String,
     roots: ManagedArtifactRoots,
+    sha256_cache: Mutex<HashMap<Sha256CacheKey, String>>,
 }
 
 impl ArtifactTrustService {
@@ -451,6 +457,7 @@ impl ArtifactTrustService {
             catalog,
             catalog_digest: sha256_bytes(bytes),
             roots,
+            sha256_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -472,7 +479,40 @@ impl ArtifactTrustService {
             },
             catalog_digest: "0".repeat(64),
             roots: ManagedArtifactRoots::from_application_data_root(&temp),
+            sha256_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Perf-кэш: полный хеш вычисляется минимум один раз за сессию для каждого файла.
+    /// Ключ: (canonical_path, mtime_nanos, size). При изменении mtime или size — повторный хеш.
+    /// Не ослабляет trust: полный хеш минимум один раз за сессию.
+    pub(crate) fn sha256_file_cached(&self, path: &Path) -> Result<String, ArtifactTrustError> {
+        let metadata = fs::metadata(path)
+            .map_err(|_| ArtifactTrustError::new("io_error", "hash input unavailable"))?;
+        let mtime_nanos = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let size = metadata.len();
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let key: Sha256CacheKey = (canonical, mtime_nanos, size);
+
+        let cached = self.sha256_cache.lock().expect("sha256 cache poisoned").get(&key).cloned();
+        if let Some(hash) = cached {
+            eprintln!("[PERF] sha256_file_cached HIT path={}", path.display());
+            return Ok(hash);
+        }
+
+        let hash = sha256_file(path)?;
+        self.sha256_cache.lock().expect("sha256 cache poisoned").insert(key, hash.clone());
+        Ok(hash)
+    }
+
+    /// Принудительная инвалидация кэша (при install/download/update артефакта).
+    pub(crate) fn invalidate_sha256_cache(&self) {
+        self.sha256_cache.lock().expect("sha256 cache poisoned").clear();
     }
 
     pub(crate) fn guard_runtime_state_root(&self) -> Result<Vec<File>, ArtifactTrustError> {
@@ -957,7 +997,7 @@ impl ArtifactTrustService {
                     code: "bytes_mismatch",
                 };
             }
-            match sha256_file(&file_path) {
+            match self.sha256_file_cached(&file_path) {
                 Ok(hash) if hash == required.sha256 => {}
                 Ok(_) => {
                     return ValidationOutcome {
@@ -1037,7 +1077,7 @@ impl ArtifactTrustService {
                 code: "bytes_mismatch",
             };
         }
-        match sha256_file(&license_path) {
+        match self.sha256_file_cached(&license_path) {
             Ok(hash) if hash == runtime.license_asset.sha256 => {}
             Ok(_) => {
                 return ValidationOutcome {
@@ -1133,7 +1173,7 @@ impl ArtifactTrustService {
                 }
             }
         }
-        match sha256_file(&path) {
+        match self.sha256_file_cached(&path) {
             Ok(hash) if hash == model.asset_sha256 => ValidationOutcome {
                 status: InstallationStatus::Valid,
                 observed_bytes: Some(metadata.len()),
@@ -2182,6 +2222,7 @@ fn open_directory_guard(path: &Path) -> Result<File, ArtifactTrustError> {
 }
 
 fn sha256_file(path: &Path) -> Result<String, ArtifactTrustError> {
+    let start = std::time::Instant::now();
     let file = File::open(path)
         .map_err(|_| ArtifactTrustError::new("io_error", "hash input unavailable"))?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
@@ -2196,7 +2237,10 @@ fn sha256_file(path: &Path) -> Result<String, ArtifactTrustError> {
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    let result = format!("{:x}", hasher.finalize());
+    let dur_ms = start.elapsed().as_millis();
+    eprintln!("[PERF] sha256_file path={} dur_ms={dur_ms}", path.display());
+    Ok(result)
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {
