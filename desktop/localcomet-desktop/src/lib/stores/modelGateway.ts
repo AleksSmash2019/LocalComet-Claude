@@ -489,17 +489,23 @@ export function setManagedHarness(harnessId: HarnessId): void {
 
 export async function refreshManagedRuntimeStatus(): Promise<void> {
   try {
+    const previous = get(managedRuntimeStore);
+    const isStarting = previous.status?.state === 'Starting' || previous.status?.model_state === 'Loading';
+    // Condition f: skip expensive getManagedInstalledArtifacts during Starting/Loading.
+    // Use previously cached artifacts; full refresh happens on next call after Ready/Failed.
     const [status, runtimeCatalog, modelCatalog, installedArtifacts, logs] = await Promise.all([
       getManagedRuntimeStatus(),
       getManagedRuntimeCatalog(),
       getManagedModelCatalog(),
-      getManagedInstalledArtifacts(),
+      isStarting ? Promise.resolve(null) : getManagedInstalledArtifacts(),
       getManagedRuntimeLogs()
     ]);
-    assertManagedTrustBundle(runtimeCatalog, modelCatalog, installedArtifacts);
-    const previous = get(managedRuntimeStore);
+    if (installedArtifacts) {
+      assertManagedTrustBundle(runtimeCatalog, modelCatalog, installedArtifacts);
+    }
+    const effectiveArtifacts = installedArtifacts?.artifacts ?? previous.installedArtifacts;
     const defaultApprovedModel = modelCatalog.models.find((model) =>
-      isInstalledLaunchable(model, runtimeCatalog.runtimes, installedArtifacts.artifacts)
+      isInstalledLaunchable(model, runtimeCatalog.runtimes, effectiveArtifacts)
     );
     const selectedModelId = modelCatalog.models.some((model) => model.model_id === previous.selectedModelId)
       ? previous.selectedModelId
@@ -515,14 +521,14 @@ export async function refreshManagedRuntimeStatus(): Promise<void> {
       previous.binding.model_id === selectedModelId &&
       previous.binding.runtime_instance_id === status.runtime_instance_id &&
       selectedModel !== undefined &&
-      isInstalledLaunchable(selectedModel, runtimeCatalog.runtimes, installedArtifacts.artifacts);
+      isInstalledLaunchable(selectedModel, runtimeCatalog.runtimes, effectiveArtifacts);
     managedRuntimeStore.update((state) => ({
       ...state,
       status,
       catalogIdentity: catalogIdentityOf(runtimeCatalog),
       runtimeCatalog: runtimeCatalog.runtimes,
       catalog: modelCatalog.models,
-      installedArtifacts: installedArtifacts.artifacts,
+      installedArtifacts: effectiveArtifacts,
       readiness: null,
       selectedModelId,
       logs,
