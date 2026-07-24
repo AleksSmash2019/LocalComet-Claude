@@ -6,18 +6,81 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  pytest:
-    runs-on: ubuntu-latest
+  python-tests:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Run tests
-        run: python -m pytest tests/ -q
+      - name: Run Python tests
+        run: python -m pytest tests/ -q --tb=short
+
+      - name: Security-negative gate
+        run: python tools/test_up02_wp01_security_negative.py
+
+      - name: Compile gate
+        run: python -m compileall core next agents modules -q
+
+  rust-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Create runtime placeholders for tauri_build
+        working-directory: desktop/localcomet-desktop/src-tauri
+        shell: cmd
+        run: |
+          mkdir binaries\app
+          mkdir binaries\DLLs
+          type nul > binaries\localcomet-core-x86_64-pc-windows-msvc.exe
+          type nul > binaries\LICENSE.python.txt
+          type nul > binaries\python3.dll
+          type nul > binaries\python314.dll
+          type nul > binaries\python314.zip
+          type nul > binaries\runtime-manifest.tsv
+          echo {} > binaries\up00-runtime-manifest.json
+          type nul > binaries\vcruntime140.dll
+          type nul > binaries\vcruntime140_1.dll
+
+      - name: Run Rust tests
+        working-directory: desktop/localcomet-desktop/src-tauri
+        # --no-default-features skips custom-protocol (production bundle validation).
+        # Placeholders above satisfy tauri_build resource existence checks.
+        # Test count is identical: 131 passed with or without the flag.
+        run: cargo test --no-default-features
+
+  frontend-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/localcomet-desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop/localcomet-desktop
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: desktop/localcomet-desktop
+        run: npm run test
